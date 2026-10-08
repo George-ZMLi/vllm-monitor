@@ -2,11 +2,247 @@
 <html lang="zh">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>vLLM 实时监控面板</title>
 <style>
+  :root {
+    --bg: #f2f5fa;
+    --panel: #ffffff;
+    --border: #dde5f1;
+    --text: #22364f;
+    --dim: #8195b0;
+    --accent: #4d7fd6;
+    --accent-soft: #e8f0fc;
+    --ok: #2f9e77;
+    --warn: #d79a35;
+    --err: #d65866;
+    --shadow: 0 1px 2px rgba(34, 54, 79, .04), 0 6px 20px rgba(34, 54, 79, .06);
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html, body { margin: 0; }
+  body {
+    background: linear-gradient(180deg, #e8f0fa 0%, var(--bg) 280px) fixed;
+    color: var(--text);
+    font: 14px/1.5 -apple-system, "SF Pro Text", "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+
+  /* ---------- 顶栏（标题区不可选中） ---------- */
+  header {
+    display: flex; align-items: center; gap: 18px;
+    padding: 12px 22px;
+    background: rgba(255, 255, 255, .82);
+    backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--border);
+    position: sticky; top: 0; z-index: 10;
+    user-select: none; -webkit-user-select: none;
+  }
+  .title {
+    font-size: 15px; font-weight: 700; letter-spacing: .02em;
+    display: flex; align-items: center; gap: 9px; white-space: nowrap;
+  }
+  .title .logo {
+    width: 24px; height: 24px; border-radius: 7px; flex: none;
+    background: linear-gradient(135deg, #4d7fd6, #7ba3e8);
+    color: #fff; font-size: 13px; font-weight: 800;
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 2px 6px rgba(77, 127, 214, .35);
+  }
+  .meta {
+    display: flex; align-items: center; gap: 8px; flex: none;
+    color: var(--dim); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap;
+  }
+  .meta select {
+    appearance: none; -webkit-appearance: none;
+    border: 1px solid var(--border); background: var(--panel); color: var(--text);
+    border-radius: 999px; padding: 4px 12px;
+    font: 500 12px/1.4 inherit; cursor: pointer;
+    transition: border-color .15s;
+  }
+  .meta select:hover { border-color: var(--accent); }
+  .dot {
+    width: 8px; height: 8px; border-radius: 50%; flex: none;
+    background: var(--ok); box-shadow: 0 0 0 3px rgba(47, 158, 119, .15);
+    transition: background .2s, box-shadow .2s;
+  }
+  .dot.down { background: var(--err); box-shadow: 0 0 0 3px rgba(214, 88, 102, .18); }
+
+  /* ---------- 实例 pills（横滑 + 状态点） ---------- */
+  .pills { display: flex; align-items: center; gap: 7px; flex: 1; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+  .pills::-webkit-scrollbar { display: none; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 7px; flex: none;
+    border: 1px solid var(--border); background: var(--panel); color: var(--dim);
+    border-radius: 999px; padding: 5px 7px 5px 12px;
+    font: 500 12.5px/1.4 inherit; cursor: pointer;
+    transition: border-color .15s, background .15s, color .15s;
+    font-family: inherit;
+  }
+  .pill:hover { border-color: var(--accent); color: var(--text); }
+  .pill .st { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); flex: none; transition: background .2s; }
+  .pill .st.down { background: var(--err); }
+  .pill .x {
+    width: 16px; height: 16px; border-radius: 50%; line-height: 15px; text-align: center;
+    font-size: 13px; color: var(--dim); opacity: 0; transition: opacity .15s, background .15s;
+  }
+  .pill:hover .x { opacity: .55; }
+  .pill .x:hover { opacity: 1; background: rgba(34, 54, 79, .08); }
+  .pill.active {
+    background: var(--accent); border-color: var(--accent); color: #fff;
+    box-shadow: 0 2px 10px rgba(77, 127, 214, .35);
+  }
+  .pill.active .st { background: #fff; }
+  .pill.active .st.down { background: var(--err); }
+  .pill.active .x { color: #fff; }
+  .pill.add { border-style: dashed; background: transparent; padding: 5px 13px; }
+  .pill.add:hover { color: var(--accent); border-color: var(--accent); }
+
+  /* ---------- 主体 ---------- */
+  .banner {
+    margin: 14px auto 0; width: fit-content; max-width: calc(100% - 44px);
+    padding: 9px 14px; border: 1px solid #f3c8ce; background: #fdeeef; color: #a3323f;
+    border-radius: 10px; font-size: 13px;
+  }
+  #toast {
+    position: fixed; top: 66px; left: 50%; transform: translateX(-50%); z-index: 60;
+    padding: 8px 14px; border: 1px solid #ecd9a0; background: #fff6dd; color: #7a5d1d;
+    border-radius: 10px; font-size: 12.5px; box-shadow: var(--shadow);
+  }
+  main { padding: 16px 22px 8px; display: flex; flex-direction: column; gap: 14px; max-width: 1280px; margin: 0 auto; }
+  .welcome { text-align: center; padding: 64px 20px 80px; }
+  .welcome h2 { margin: 0 0 8px; font-size: 20px; }
+  .welcome p { color: var(--dim); margin: 0 0 22px; font-size: 13px; }
+  .cta {
+    background: var(--accent); color: #fff; border: 1px solid var(--accent);
+    border-radius: 10px; font: 600 15px/1.4 inherit; padding: 12px 28px;
+    cursor: pointer; box-shadow: 0 4px 14px rgba(77, 127, 214, .35);
+  }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; }
+  .card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+    padding: 13px 15px; box-shadow: var(--shadow); transition: opacity .25s;
+  }
+  .card label {
+    display: block; font-size: 10.5px; font-weight: 600; letter-spacing: .07em;
+    text-transform: uppercase; color: var(--dim); margin-bottom: 6px;
+  }
+  .card .val { font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.15; white-space: nowrap; }
+  .card .val small { font-size: 12px; color: var(--dim); font-weight: 500; margin-left: 3px; }
+  .card .sub { color: var(--dim); font-size: 11px; margin-top: 4px; min-height: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .card.kv-hot .val { color: var(--err); }
+  .card.kv-warm .val { color: var(--warn); }
+  body.stale .card { opacity: .45; }
+
+  .charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 10px; }
+  .panel {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+    padding: 14px; box-shadow: var(--shadow);
+  }
+  .phead { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 4px; }
+  .phead h3 { margin: 0; font-size: 13px; font-weight: 650; }
+  .legend { font-size: 11px; color: var(--dim); display: flex; gap: 12px; flex-wrap: wrap; font-variant-numeric: tabular-nums; }
+  .legend b { color: var(--text); font-weight: 650; }
+  .legend .sw { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 4px; }
+  canvas { width: 100%; height: 220px; display: block; }
+  footer { color: var(--dim); font-size: 11px; padding: 12px 22px 30px; text-align: center; }
+
+  /* ---------- 双模式：DOM 只建一份，用 body.mode-lite / body.mode-full 的 CSS 过滤器切换 ---------- */
+  body.mode-full .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
+  body.mode-full .charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); }
+  body.mode-lite .cards { display: flex; flex-wrap: nowrap; overflow-x: auto; }
+  body.mode-lite .cards .card { flex: none; width: 148px; }
+  body.mode-lite .lite-hidden { display: none !important; }
+  body.mode-lite .chart-lite-hidden { display: none !important; }
+  body.mode-lite .charts { grid-template-columns: 1fr; }
+  body.mode-lite .pill,
+  body.mode-lite .meta select,
+  body.mode-lite .btn,
+  body.mode-lite .cta { min-height: 44px; }
+  body.mode-lite .card { min-height: 44px; }
+
+  /* ---------- 添加实例弹窗（挂载到 #modal-root） ---------- */
+  .mask {
+    position: fixed; inset: 0; z-index: 50;
+    background: rgba(34, 54, 79, .32); backdrop-filter: blur(3px);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .modal {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+    padding: 22px 24px; width: 360px; max-width: calc(100vw - 40px);
+    box-shadow: 0 18px 50px rgba(34, 54, 79, .22);
+  }
+  .modal h3 { margin: 0 0 16px; font-size: 15px; font-weight: 700; }
+  .modal label {
+    display: block; font-size: 11px; font-weight: 600; letter-spacing: .05em;
+    text-transform: uppercase; color: var(--dim); margin-bottom: 12px;
+  }
+  .modal input {
+    display: block; width: 100%; margin-top: 5px; padding: 8px 11px;
+    border: 1px solid var(--border); border-radius: 8px;
+    font: 13px/1.4 inherit; color: var(--text); background: #fafcff;
+    transition: border-color .15s, box-shadow .15s;
+  }
+  .modal input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(77, 127, 214, .14); }
+  .hint { font-size: 11.5px; color: var(--dim); margin: 2px 0 16px; }
+  .mrow { display: flex; justify-content: flex-end; gap: 8px; }
+  .btn { border-radius: 8px; padding: 8px 18px; font-size: 13px; cursor: pointer; transition: .15s; font-family: inherit; }
+  .btn.primary { background: var(--accent); border: 1px solid var(--accent); color: #fff; }
+  .btn.primary:hover { background: #3f6fc4; }
+  .btn.ghost { background: transparent; border: 1px solid var(--border); color: var(--dim); }
+  .btn.ghost:hover { color: var(--text); border-color: var(--dim); }
+  .merr { margin-top: 12px; font-size: 12px; color: var(--err); }
 </style>
 </head>
 <body>
+<header>
+  <div class="title"><span class="logo">V</span>vLLM 监控</div>
+  <div class="pills" id="pills"></div>
+  <div class="meta">
+    <select id="interval" title="刷新间隔" aria-label="刷新间隔">
+      <option value="1000">1s</option>
+      <option value="2000">2s</option>
+      <option value="5000">5s</option>
+    </select>
+    <select id="mode" title="显示模式" aria-label="显示模式">
+      <option value="lite">精简</option>
+      <option value="full">完整</option>
+    </select>
+    <span class="dot" id="dot"></span><span id="updated">等待数据…</span>
+  </div>
+</header>
+<div class="banner" id="banner" hidden></div>
+<div id="toast" hidden></div>
+<main>
+  <section class="welcome" id="welcome" hidden>
+    <h2>还没有监控实例</h2>
+    <p>添加一个 vLLM 实例，即可在此实时查看请求、KV 缓存、吞吐与延迟。</p>
+    <button class="cta" id="welcome-add" type="button">＋ 添加监控实例</button>
+  </section>
+  <section class="dash" id="dash" hidden>
+    <section class="cards">
+      <div class="card"><label>正在运行</label><div class="val" id="v-run">–</div><div class="sub">running requests</div></div>
+      <div class="card"><label>排队等待</label><div class="val" id="v-wait">–</div><div class="sub">waiting requests</div></div>
+      <div class="card" id="card-kv"><label>KV 缓存</label><div class="val" id="v-kv">–<small>%</small></div><div class="sub">kv_cache_usage</div></div>
+      <div class="card"><label>生成速度</label><div class="val" id="v-gen">–<small>tok/s</small></div><div class="sub">实时 · generation</div></div>
+      <div class="card lite-hidden"><label>预填充速度</label><div class="val" id="v-prompt">–<small>tok/s</small></div><div class="sub">实时 · prompt</div></div>
+      <div class="card"><label>TTFT p50</label><div class="val" id="v-ttft">–</div><div class="sub">首 token 延迟（累计）</div></div>
+      <div class="card"><label>E2E p99</label><div class="val" id="v-e2e">–</div><div class="sub">端到端延迟（累计）</div></div>
+      <div class="card lite-hidden"><label>成功请求</label><div class="val" id="v-succ">–</div><div class="sub" id="s-succ">finished requests</div></div>
+      <div class="card lite-hidden"><label>抢占次数</label><div class="val" id="v-preem">–</div><div class="sub">preemptions</div></div>
+      <div class="card lite-hidden"><label>内存</label><div class="val" id="v-mem">–<small>MB</small></div><div class="sub">resident</div></div>
+      <div class="card lite-hidden"><label>模型</label><div class="val" id="v-model">–</div><div class="sub" id="s-engines"></div></div>
+      <div class="card lite-hidden" id="card-spec" hidden><label>投机解码接受率</label><div class="val" id="v-spec">–</div><div class="sub">accepted / draft tokens</div></div>
+    </section>
+    <section class="charts">
+      <div class="panel chart-lite-hidden"><div class="phead"><h3>请求数量</h3><div class="legend" id="lg1"></div></div><canvas id="c1"></canvas></div>
+      <div class="panel chart-lite-hidden"><div class="phead"><h3>KV 缓存使用率</h3><div class="legend" id="lg2"></div></div><canvas id="c2"></canvas></div>
+      <div class="panel"><div class="phead"><h3>Token 吞吐</h3><div class="legend" id="lg3"></div></div><canvas id="c3"></canvas></div>
+      <div class="panel"><div class="phead"><h3>延迟</h3><div class="legend" id="lg4"></div></div><canvas id="c4"></canvas></div>
+    </section>
+  </section>
+</main>
+<footer id="foot"></footer>
+<div id="modal-root"></div>
 <script>
 'use strict';
 // ---------- Prometheus 文本解析（从 server.mjs 原样移植）----------
@@ -270,6 +506,482 @@ function createPoller({
     stop,
     get running() { return running; },
   };
+}
+
+// ---------- 渲染 + 双模式 + boot 接线（从 public/app.js + public/index.html 移植）----------
+
+const RING_MAX = 2400;                       // 每实例保留 2400 个采样点
+const INTERVALS = [1000, 2000, 5000];         // 支持的刷新间隔
+const FETCH_TIMEOUT_MS = 8000;
+const MODE_MIN_WIDTH = 640;                  // 首开自动选模式阈值
+const INTERVAL_KEY = 'vllmmon.interval';
+const MODE_KEY = 'vllmmon.mode';
+const ACTIVE_KEY = 'vllmmon.active';
+const FIXED_UA = 'vllm-monitor';              // 固定非空 UA
+
+const targets = [];                          // 实例列表；poller 共享此引用，applyTargets 原地增删
+const store = new Map();                      // target.id -> 环形缓冲 { running, waiting, kv, gen, prompt, ttftP50, e2eP99 }
+const histories = new Map();                 // target.id -> [{ ts, c }]（供 computeRates 取相邻两点）
+const dotEls = new Map();                    // target.id -> pill 状态点元素
+const failedSet = new Set();                 // 处于失败退避中的 target.id
+const elCache = new Map();
+let storageRef = null;
+let poller = null;
+let intervalMs = 2000;
+let activeId = null;
+let mode = 'full';
+
+function getStore(id) {
+  if (!store.has(id)) store.set(id, { running: [], waiting: [], kv: [], gen: [], prompt: [], ttftP50: [], e2eP99: [] });
+  return store.get(id);
+}
+function pushRing(arr, v) { arr.push(v); if (arr.length > RING_MAX) arr.shift(); }
+function $(id) {
+  if (!elCache.has(id)) elCache.set(id, document.getElementById(id));
+  return elCache.get(id);
+}
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+function setNum(id, text) {
+  const el = $(id);
+  if (!el) return;
+  if (el.firstChild && el.firstChild.nodeType === 3) el.firstChild.nodeValue = text;
+  else el.textContent = text;
+}
+function fmtN(v) {
+  if (v == null || !isFinite(v)) return '–';
+  const a = Math.abs(v);
+  if (a >= 1e6) return (v / 1e6).toFixed(1) + 'M';
+  if (a >= 1e4) return (v / 1e3).toFixed(1) + 'k';
+  if (a >= 100) return String(Math.round(v));
+  if (a >= 10) return v.toFixed(1);
+  return v.toFixed(2);
+}
+function fmtS(v) {
+  if (v == null || !isFinite(v)) return '–';
+  if (v < 1) return Math.round(v * 1000) + ' ms';
+  return v.toFixed(2) + ' s';
+}
+function shortVal(v) {
+  if (v >= 1e4) return Math.round(v / 1e3) + 'k';
+  if (v >= 100) return String(Math.round(v));
+  if (v >= 1) return v.toFixed(1);
+  return v.toFixed(2);
+}
+const activeName = () => (targets.find((t) => t.id === activeId) || {}).name || '';
+
+const CHARTS = [
+  { cv: 'c1', lg: 'lg1', unit: '', fixed: false, series: [
+    { label: 'running', color: '#4d7fd6', key: 'running', fmt: fmtN },
+    { label: 'waiting', color: '#e09b3f', key: 'waiting', fmt: fmtN } ] },
+  { cv: 'c2', lg: 'lg2', unit: '%', fixed: 100, series: [
+    { label: 'kv_cache', color: '#8a76d9', key: 'kv', fmt: (v) => v == null ? '–' : v.toFixed(1) } ] },
+  { cv: 'c3', lg: 'lg3', unit: 'tok/s', fixed: false, series: [
+    { label: 'generation', color: '#2f9e77', key: 'gen', fmt: fmtN },
+    { label: 'prompt', color: '#59a8dc', key: 'prompt', fmt: fmtN } ] },
+  { cv: 'c4', lg: 'lg4', unit: 's', fixed: false, series: [
+    { label: 'TTFT p50', color: '#d6709a', key: 'ttftP50', fmt: fmtS },
+    { label: 'E2E p99', color: '#7c6fd0', key: 'e2eP99', fmt: fmtS } ] },
+];
+
+// 折线图：仅在有新数据点到达时调用；canvas 按 min(DPR, 2) 缩放
+function draw(c) {
+  if (!activeId) return;
+  const cv = $(c.cv);
+  if (!cv.offsetParent) return;               // 精简模式隐藏该图时跳过
+  const st = getStore(activeId);
+  const series = c.series.map((s) => ({ ...s, data: st[s.key] }));
+  const ctx = cv.getContext('2d');
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const w = cv.clientWidth || 600, h = cv.clientHeight || 220;
+  if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) {
+    cv.width = Math.round(w * dpr);
+    cv.height = Math.round(h * dpr);
+  }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  const padL = 46, padR = 10, padT = 10, padB = 24;
+  const pw = w - padL - padR, ph = h - padT - padB;
+  let yMax = c.fixed;
+  if (!c.fixed) {
+    yMax = 0;
+    for (const s of series) for (const v of s.data) if (v != null && isFinite(v)) yMax = Math.max(yMax, v);
+    yMax = Math.max(yMax * 1.15, 0.5);
+  }
+  const Y = (v) => padT + ph * (1 - Math.min(Math.max(v / yMax, 0), 1));
+  ctx.font = '10px ui-monospace, SFMono-Regular, Menlo, monospace';
+  ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+  for (let i = 0; i <= 4; i++) {
+    const y = padT + ph * (i / 4);
+    ctx.strokeStyle = 'rgba(34, 54, 79, .08)';
+    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(w - padR, y); ctx.stroke();
+    ctx.fillStyle = 'rgba(129, 149, 176, .9)';
+    const val = yMax * (1 - i / 4);
+    ctx.fillText(c.unit === '%' ? Math.round(val) + '%' : shortVal(val), padL - 6, y);
+  }
+  ctx.textBaseline = 'top';
+  ctx.fillStyle = 'rgba(129, 149, 176, .8)';
+  const mins = Math.round(RING_MAX * intervalMs / 60000);
+  ctx.textAlign = 'left';
+  ctx.fillText('-' + mins + 'm', padL, h - padB + 8);
+  ctx.textAlign = 'right';
+  ctx.fillText('now', w - padR, h - padB + 8);
+  // 折线（右对齐窗口，null = 缺数据断开；点数过多按像素抽稀）
+  const maxPts = Math.max(2, Math.floor(pw / 2));
+  for (const s of series) {
+    const vals = s.data.slice(-RING_MAX);
+    const pad = RING_MAX - vals.length;
+    const step = Math.max(1, Math.ceil(vals.length / maxPts));
+    const idx = [];
+    for (let i = 0; i < vals.length; i += step) idx.push(i);
+    if (idx[idx.length - 1] !== vals.length - 1) idx.push(vals.length - 1); // 末端点必画
+    ctx.strokeStyle = s.color;
+    ctx.lineWidth = 1.5;
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    let started = false;
+    for (const i of idx) {
+      const v = vals[i];
+      if (v == null || !isFinite(v)) { started = false; continue; }
+      const x = padL + pw * ((i + pad) / (RING_MAX - 1));
+      if (!started) { ctx.moveTo(x, Y(v)); started = true; }
+      else ctx.lineTo(x, Y(v));
+    }
+    ctx.stroke();
+  }
+}
+
+function legend(c) {
+  if (!activeId) return;
+  const st = getStore(activeId);
+  const el = $(c.lg);
+  el.innerHTML = c.series.map((s) => {
+    const arr = st[s.key];
+    let last = null;
+    for (let i = arr.length - 1; i >= 0; i--) if (arr[i] != null && isFinite(arr[i])) { last = arr[i]; break; }
+    return `<span><i class="sw" style="background:${s.color}"></i>${s.label} <b>${s.fmt(last)}</b></span>`;
+  }).join('');
+}
+
+function lastVal(arr) {
+  for (let i = arr.length - 1; i >= 0; i--) if (arr[i] != null && isFinite(arr[i])) return arr[i];
+  return null;
+}
+
+// 切换实例：用环形缓冲最近值刷新卡片，并重画 4 图
+function refreshActive() {
+  if (!activeId) return;
+  const st = getStore(activeId);
+  setNum('v-run', fmtN(lastVal(st.running)));
+  setNum('v-wait', fmtN(lastVal(st.waiting)));
+  const k = lastVal(st.kv);
+  if (k != null) setNum('v-kv', k.toFixed(1));
+  setNum('v-ttft', fmtS(lastVal(st.ttftP50)));
+  setNum('v-e2e', fmtS(lastVal(st.e2eP99)));
+  CHARTS.forEach((c) => { draw(c); legend(c); });
+}
+
+// 卡片 + 图表批量刷新（DOM 走缓存元素 textContent，每拍一次）
+function renderUp(snap) {
+  const g = snap.gauges;
+  setNum('v-run', fmtN(g.running));
+  setNum('v-wait', fmtN(g.waiting));
+  setNum('v-kv', g.kvPct.toFixed(1));
+  const kvCard = $('card-kv');
+  kvCard.classList.toggle('kv-hot', g.kvPct >= 90);
+  kvCard.classList.toggle('kv-warm', g.kvPct >= 70 && g.kvPct < 90);
+  setNum('v-gen', fmtN(snap.rates?.generationTokensPerS ?? null));
+  setNum('v-prompt', fmtN(snap.rates?.promptTokensPerS ?? null));
+  setNum('v-ttft', fmtS(snap.hist['time_to_first_token_seconds']?.p50));
+  setNum('v-e2e', fmtS(snap.hist['e2e_request_latency_seconds']?.p99));
+  setNum('v-succ', fmtN(snap.successTotal));
+  $('s-succ').textContent =
+    Object.entries(snap.successByReason || {}).filter(([, v]) => v > 0).map(([k, v]) => k + ' ' + v).join(' · ') || 'finished requests';
+  setNum('v-preem', fmtN(g.preemptions));
+  setNum('v-mem', String(Math.round(g.residentMb)));
+  setNum('v-model', snap.model || '–');
+  $('s-engines').textContent = snap.engines?.length ? 'engines: ' + snap.engines.length : 'engines: –';
+  if (snap.specDecode) {
+    $('card-spec').hidden = false;
+    $('v-spec').textContent = (snap.specDecode.acceptRate * 100).toFixed(1) + '%';
+  } else {
+    $('card-spec').hidden = true;
+  }
+  document.body.classList.remove('stale');
+  $('dot').classList.remove('down');
+  $('updated').textContent = '更新 ' + new Date(snap.ts).toLocaleTimeString('zh-CN', { hour12: false });
+  $('foot').textContent =
+    `实例 ${activeName()} · 抓取 ${snap.metricsUrl} · 每 ${intervalMs / 1000}s · 历史 ${RING_MAX} 点（约 ${Math.round(RING_MAX * intervalMs / 60000)} 分钟，仅保存在内存中）`;
+  CHARTS.forEach((c) => { draw(c); legend(c); });
+}
+
+function renderDown() {
+  document.body.classList.add('stale');
+  $('dot').classList.add('down');
+}
+
+// 渲染入口（供 Task 6）：新数据点进环形缓冲 + 批量刷 DOM
+function renderSnapshot(targetId, snap) {
+  const st = getStore(targetId);
+  if (snap.up) {
+    pushRing(st.running, snap.gauges.running);
+    pushRing(st.waiting, snap.gauges.waiting);
+    pushRing(st.kv, snap.gauges.kvPct);
+    pushRing(st.gen, snap.rates?.generationTokensPerS ?? null);
+    pushRing(st.prompt, snap.rates?.promptTokensPerS ?? null);
+    pushRing(st.ttftP50, snap.hist['time_to_first_token_seconds']?.p50 ?? null);
+    pushRing(st.e2eP99, snap.hist['e2e_request_latency_seconds']?.p99 ?? null);
+  } else {
+    for (const k of Object.keys(st)) pushRing(st[k], null); // 断档，图中留空
+  }
+  const dot = dotEls.get(targetId);
+  if (dot) dot.classList.toggle('down', !snap.up);
+  if (targetId === activeId) { if (snap.up) renderUp(snap); else renderDown(); }
+}
+
+// ---------- 抓取 + 轮询接线 ----------
+
+function fetchMetrics(url, target) {
+  const headers = { 'User-Agent': FIXED_UA };
+  if (target.apiKey) headers['Authorization'] = 'Bearer ' + target.apiKey;
+  return fetch(url, {
+    method: 'GET',
+    headers,
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    cache: 'no-store',
+  }).then((r) => {
+    if (!r.ok) throw { status: r.status };
+    return r.text();
+  });
+}
+
+function makeUISnap(t, text) {
+  const snap = buildSnapshot(parseProm(text));
+  let hist = histories.get(t.id);
+  if (!hist) { hist = []; histories.set(t.id, hist); }
+  hist.push({ ts: Date.now(), c: {
+    prompt: snap.gauges.promptTokens,
+    generation: snap.gauges.generationTokens,
+    success: snap.successTotal,
+    preemptions: snap.gauges.preemptions,
+  } });
+  if (hist.length > 8) hist.splice(0, hist.length - 8);
+  return {
+    up: true,
+    ts: Date.now(),
+    metricsUrl: metricsUrlOf(t.baseURL, t.metricsPath),
+    gauges: snap.gauges,
+    rates: computeRates(hist),
+    successTotal: snap.successTotal,
+    successByReason: snap.successByReason,
+    model: snap.model,
+    engines: snap.engines,
+    specDecode: snap.specDecode,
+    hist: snap.hist,
+  };
+}
+
+function onSample(id, text) {
+  const t = targets.find((x) => x.id === id);
+  if (!t) return;
+  failedSet.delete(id);
+  if (failedSet.size === 0) $('banner').hidden = true;
+  renderSnapshot(id, makeUISnap(t, text));
+}
+
+function onFail(id, err) {
+  failedSet.add(id);
+  const t = targets.find((x) => x.id === id);
+  const f = classifyFailure(err && err.status != null ? { status: err.status } : { error: err });
+  renderSnapshot(id, { up: false, error: f.msg });
+  $('banner').textContent = `实例 “${t ? t.name : id}” 已断连，每 5s 重试`;
+  $('banner').hidden = false;
+}
+
+// ---------- 实例管理 ----------
+
+function renderPills() {
+  dotEls.clear();
+  const el = $('pills');
+  el.innerHTML = '';
+  for (const t of targets) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'pill' + (t.id === activeId ? ' active' : '');
+    b.dataset.id = t.id;
+    b.title = metricsUrlOf(t.baseURL, t.metricsPath);
+    b.innerHTML = `<i class="st"></i><span>${esc(t.name)}</span><span class="x" title="删除实例">×</span>`;
+    b.addEventListener('click', (ev) => {
+      if (ev.target.classList.contains('x')) { ev.stopPropagation(); removeTarget(t); return; }
+      setActive(t.id);
+    });
+    el.appendChild(b);
+    dotEls.set(t.id, b.querySelector('.st'));
+  }
+  const add = document.createElement('button');
+  add.type = 'button';
+  add.className = 'pill add';
+  add.textContent = '＋ 添加';
+  add.addEventListener('click', openAddModal);
+  el.appendChild(add);
+}
+
+function setActive(id) {
+  activeId = id;
+  try {
+    if (storageRef) {
+      if (id) storageRef.setItem(ACTIVE_KEY, id);
+      else storageRef.removeItem(ACTIVE_KEY);
+    }
+  } catch { /* file:// 下 localStorage 不可用时忽略 */ }
+  document.querySelectorAll('.pill[data-id]').forEach((p) => p.classList.toggle('active', p.dataset.id === id));
+  refreshActive();
+}
+
+function removeTarget(t) {
+  if (!confirm(`删除实例 “${t.name}”？`)) return;
+  const list = targets.filter((x) => x.id !== t.id);
+  saveTargets(storageRef, list);
+  if (activeId === t.id) activeId = list[0] ? list[0].id : null;
+  applyTargets(list);
+}
+
+// 添加实例弹窗（挂载到 #modal-root）
+function openAddModal() {
+  const root = $('modal-root');
+  if (root.querySelector('#modal')) return;
+  root.innerHTML = `
+  <div class="mask" id="modal">
+    <div class="modal">
+      <h3>添加监控实例</h3>
+      <label>名称<input id="f-name" placeholder="实例名称" autocomplete="off"></label>
+      <label>Base URL<input id="f-base" placeholder="https://your-vllm.example.com/v1" autocomplete="off" spellcheck="false"></label>
+      <label>metrics 路径（可选）<input id="f-path" placeholder="如 /vllm/metrics（留空默认 /metrics）" autocomplete="off"></label>
+      <label>API Key（可选）<input id="f-key" type="password" placeholder="sk-…（以 Bearer 头随请求发送）" autocomplete="off"></label>
+      <p class="hint" id="f-hint">metrics 端点将自动取为：baseURL 域名根下的 /metrics</p>
+      <div class="mrow">
+        <button class="btn ghost" id="f-cancel" type="button">取消</button>
+        <button class="btn primary" id="f-add" type="button">添加</button>
+      </div>
+      <p class="merr" id="f-err" hidden></p>
+    </div>
+  </div>`;
+  const q = (sel) => root.querySelector(sel);
+  q('#f-cancel').addEventListener('click', closeModal);
+  q('#modal').addEventListener('click', (e) => { if (e.target.id === 'modal') closeModal(); });
+  q('#f-base').addEventListener('input', () => {
+    const v = q('#f-base').value.trim();
+    try { q('#f-hint').textContent = 'metrics 端点将自动取为：' + new URL(v).origin + (q('#f-path').value.trim() || '/metrics'); }
+    catch { q('#f-hint').textContent = 'metrics 端点将自动取为：baseURL 域名根下的 /metrics'; }
+  });
+  q('#f-add').addEventListener('click', addInstance);
+  q('#f-name').focus();
+}
+
+function closeModal() {
+  const root = $('modal-root');
+  if (root) root.innerHTML = '';
+}
+
+function addInstance() {
+  const q = (sel) => $('modal-root').querySelector(sel);
+  const name = q('#f-name').value.trim();
+  const baseURL = q('#f-base').value.trim();
+  const metricsPath = q('#f-path').value.trim();
+  const apiKey = q('#f-key').value.trim();
+  const err = q('#f-err');
+  err.hidden = true;
+  let t;
+  try { t = makeTarget({ name, baseURL, metricsPath, apiKey }); }
+  catch (e) { err.textContent = e.message || '输入无效'; err.hidden = false; return; }
+  const list = targets.concat([t]);
+  saveTargets(storageRef, list);
+  activeId = t.id;
+  applyTargets(list);
+  closeModal();
+}
+
+// 实例列表整体重建（供 Task 6）：重建 pills + 重启 poller
+function applyTargets(list) {
+  targets.length = 0;
+  for (const t of list) targets.push(t);
+  for (const id of [...store.keys()]) {
+    if (!targets.some((t) => t.id === id)) { store.delete(id); histories.delete(id); failedSet.delete(id); }
+  }
+  if (!targets.some((t) => t.id === activeId)) activeId = targets[0] ? targets[0].id : null;
+  syncWelcome();
+  renderPills();
+  restartPoller();
+}
+
+function syncWelcome() {
+  $('welcome').hidden = targets.length > 0;
+  $('dash').hidden = targets.length === 0;
+}
+
+function restartPoller() {
+  if (poller) poller.stop();
+  poller = createPoller({ targets, fetchFn: fetchMetrics, intervalMs, onSample, onFail });
+  if (document.visibilityState === 'visible') poller.start();
+}
+
+function setMode(m, persist) {
+  mode = m;
+  document.body.className = 'mode-' + m;
+  $('mode').value = m;
+  if (persist) { try { if (storageRef) storageRef.setItem(MODE_KEY, m); } catch { /* 忽略 */ } }
+  CHARTS.forEach((c) => draw(c));
+}
+
+function showToast(msg) {
+  const t = $('toast');
+  t.textContent = msg;
+  t.hidden = false;
+}
+
+// ---------- boot：localStorage + 模式 + 轮询 + 可见性 ----------
+
+function boot() {
+  try { storageRef = window.localStorage; } catch { storageRef = null; }
+  const { targets: loaded, storageOk } = loadTargets(storageRef);
+  if (!storageOk) showToast('本地设置无法保存，刷新后丢失');
+
+  // 刷新间隔：vllmmon.interval 缺省 2000
+  let savedI = null;
+  try { savedI = storageRef ? storageRef.getItem(INTERVAL_KEY) : null; } catch { /* 忽略 */ }
+  intervalMs = INTERVALS.includes(Number(savedI)) ? Number(savedI) : 2000;
+
+  // 模式：vllmmon.mode 缺省按 innerWidth < 640 自动选 lite/full；手动选择持久化优先
+  let savedMode = null;
+  try { savedMode = storageRef ? storageRef.getItem(MODE_KEY) : null; } catch { /* 忽略 */ }
+  if (savedMode !== 'lite' && savedMode !== 'full')
+    savedMode = window.innerWidth < MODE_MIN_WIDTH ? 'lite' : 'full';
+
+  // 活动实例
+  let savedActive = null;
+  try { savedActive = storageRef ? storageRef.getItem(ACTIVE_KEY) : null; } catch { /* 忽略 */ }
+  activeId = (savedActive && loaded.some((t) => t.id === savedActive)) ? savedActive : (loaded[0] ? loaded[0].id : null);
+
+  $('interval').value = String(intervalMs);
+  $('interval').addEventListener('change', () => {
+    intervalMs = Number($('interval').value);
+    try { if (storageRef) storageRef.setItem(INTERVAL_KEY, String(intervalMs)); } catch { /* 忽略 */ }
+    restartPoller();
+  });
+
+  setMode(savedMode, false);
+  $('mode').addEventListener('change', () => setMode($('mode').value, true));
+
+  // 空列表 → 欢迎态
+  applyTargets(loaded);
+  $('welcome-add').addEventListener('click', openAddModal);
+
+  // 隐藏标签页暂停抓取，可见时恢复（poller 链式 1:1，恢复只补一拍，无爆发）
+  document.addEventListener('visibilitychange', () => {
+    if (!poller) return;
+    if (document.visibilityState === 'hidden') poller.stop();
+    else poller.start();
+  });
+  window.addEventListener('resize', () => CHARTS.forEach((c) => draw(c)));
 }
 
 // ---------- Node 测试钩子（固定尾部，勿动）----------
