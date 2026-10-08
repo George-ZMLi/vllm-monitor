@@ -58,6 +58,20 @@ test('buildSnapshot: prompt_tokens_total 为 0 → cacheHit null（除零保护�
   const s = buildSnapshot(parseProm(FIX.replace('vllm:prompt_tokens_total 1000', 'vllm:prompt_tokens_total 0')));
   assert.equal(s.cacheHit, null);
 });
+test('buildSnapshot: models 全量去重（FIX 仅 m1），model 兼容字段保留', () => {
+  const s = buildSnapshot(parseProm(FIX));
+  assert.ok(deepEqual(s.models, ['m1']));
+  assert.equal(s.model, 'm1');
+});
+test('buildSnapshot: 双模型样本 → models [m1, m2]（label 出现序），model = 第一个', () => {
+  const sample = FIX.replace(
+    'vllm:num_requests_running{model_name="m1", engine="0"} 3\nvllm:num_requests_running{model_name="m1", engine="1"} 1\n',
+    'vllm:num_requests_running{model_name="m1",engine="0"} 2\nvllm:num_requests_running{model_name="m2",engine="0"} 3\n',
+  );
+  const s = buildSnapshot(parseProm(sample));
+  assert.ok(deepEqual(s.models, ['m1', 'm2']));
+  assert.equal(s.model, 'm1');
+});
 test('computeRates: 正常差值 / 计数器回退 null / 单条 null / 同 ts null', () => {
   const r = computeRates([
     { ts: 0, c: { prompt: 100, generation: 1000, success: 10, preemptions: 1 } },
