@@ -17,11 +17,12 @@ test('intervalFor: 失败退避 5s，不低于常规间隔', () => {
 test('start(): 每 target 恰好 1 个在途请求（无爆发，Review Focus #5）', async () => {
   let nextId = 0;
   const timers = [];
+  const cancelledTargets = [];
   const p = createPoller({
     targets: [T('a'), T('b')],
     fetchFn: async () => ({ ok: true, text: async () => '' }),
     schedule: (fn, ms) => { const id = ++nextId; timers.push({ id, cancelled: false }); return id; },
-    cancel: (h) => { const t = timers.find((x) => x.id === h); if (t) t.cancelled = true; },
+    cancel: (h, t) => { cancelledTargets.push(t); const x = timers.find((y) => y.id === h); if (x) x.cancelled = true; },
   });
   const alive = () => timers.filter((t) => !t.cancelled).length;
   p.start();
@@ -29,9 +30,28 @@ test('start(): 每 target 恰好 1 个在途请求（无爆发，Review Focus #5
   assert.equal(alive(), 2);              // 每 target 各 1 个待定 timer
   p.stop();
   assert.equal(alive(), 0);              // stop 全部 cancel
+  assert.deepEqual(cancelledTargets.map((t) => t.id).sort(), ['a', 'b']); // cancel 契约：尾随 target 参
   p.start();
   await flush();
   assert.equal(alive(), 2);              // 重启仍 1:1，不累积
+  p.stop();
+});
+test('start() 重复调用不双发（running 期间再次 start 无效果）', async () => {
+  let nextId = 0;
+  const timers = [];
+  const fetches = [];
+  const p = createPoller({
+    targets: [T('a'), T('b')],
+    fetchFn: async (url, t) => { fetches.push(t.id); return { ok: true, text: async () => '' }; },
+    schedule: (fn, ms) => { const id = ++nextId; timers.push({ id, cancelled: false }); return id; },
+    cancel: (h) => { const t = timers.find((x) => x.id === h); if (t) t.cancelled = true; },
+  });
+  const alive = () => timers.filter((t) => !t.cancelled).length;
+  p.start();
+  p.start();                            // 重复 start 应被忽略
+  await flush();
+  assert.equal(alive(), 2);              // 仍 1:1，未分叉成 2 链
+  assert.deepEqual(fetches, ['a', 'b']); // 只有第一组 fetch 执行
   p.stop();
 });
 test('失败隔离：A 挂掉不影响 B 的调度（Review Focus #4）', async () => {

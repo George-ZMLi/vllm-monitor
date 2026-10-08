@@ -228,24 +228,20 @@ function createPoller({
 }) {
   let running = false;
   const handles = new Map(); // target -> pending timer handle（stop 时 cancel）
-  const inFlight = new Map(); // target -> 在途标记（stop 后在途完成不再重排）
-  const failed = new Map();   // target.id -> 是否处于失败退避
+  const failed = new Map();  // target.id -> 是否处于失败退避
 
   function run(target) {
     if (!running) return;
-    inFlight.set(target, true);
     const t0 = now();
     fetchFn(metricsUrlOf(target.baseURL, target.metricsPath), target)
       .then((resp) => {
         if (!running) return;
-        inFlight.delete(target);
         failed.set(target.id, false);
         onSample(target.id, resp);
         reschedule(target, now() - t0);
       })
       .catch((err) => {
         if (!running) return;
-        inFlight.delete(target);
         failed.set(target.id, true);
         onFail(target.id, err);
         reschedule(target, now() - t0);
@@ -253,18 +249,19 @@ function createPoller({
   }
 
   function reschedule(target, elapsedMs) {
-    const ms = nextDelayMs(elapsedMs, intervalFor(!!failed.get(target.id), intervalMs, backoffMs));
+    const ms = nextDelayMs(elapsedMs, intervalFor(failed.get(target.id), intervalMs, backoffMs));
     handles.set(target, schedule(() => run(target), ms, target));
   }
 
   function start() {
+    if (running) return;
     running = true;
     for (const t of targets.filter((t) => t.enabled)) run(t);
   }
 
   function stop() {
     running = false;
-    for (const h of handles.values()) cancel(h);
+    for (const [t, h] of handles.entries()) cancel(h, t);
     handles.clear();
   }
 
