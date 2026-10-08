@@ -14,6 +14,7 @@ function fixture() {
     'vllm:kv_cache_usage_perc 0.42',
     'vllm:num_preemptions_total 5',
     'vllm:prompt_tokens_total 1000',
+    'vllm:prompt_tokens_cached_total 370', // 固定 370/1000 → 基准命中率恒为 37.0%（占位符，不随 seq 增长）
     `vllm:generation_tokens_total ${123 * seq}`,
     `vllm:request_success_total{finished_reason="stop"} ${41 + seq}`,
     'vllm:time_to_first_token_seconds_bucket{le="0.5"} 10',

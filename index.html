@@ -257,6 +257,7 @@
       <div class="card"><label>正在运行</label><div class="val" id="v-run">–</div><div class="sub">running requests</div></div>
       <div class="card"><label>排队等待</label><div class="val" id="v-wait">–</div><div class="sub">waiting requests</div></div>
       <div class="card" id="card-kv"><label>KV 缓存</label><div class="val" id="v-kv">–<small>%</small></div><div class="sub">kv_cache_usage</div></div>
+      <div class="card lite-hidden" id="card-cache"><label>缓存命中</label><div class="val" id="v-cache">–<small>%</small></div><div class="sub">累计 · cached/prompt tokens</div></div>
       <div class="card"><label>生成速度</label><div class="val" id="v-gen">–<small>tok/s</small></div><div class="sub">实时 · generation</div></div>
       <div class="card lite-hidden"><label>预填充速度</label><div class="val" id="v-prompt">–<small>tok/s</small></div><div class="sub">实时 · prompt</div></div>
       <div class="card"><label>TTFT p50</label><div class="val" id="v-ttft">–</div><div class="sub">首 token 延迟（累计）</div></div>
@@ -400,6 +401,10 @@ function buildSnapshot(samples) {
     successTotal,
     specDecode: drafts ? { drafts, accepted: accepted ?? 0, acceptRate: (accepted ?? 0) / drafts } : null,
     hist,
+    // 缓存命中率（进程启动以来累计口径，0–100 百分数）：指标缺失（prefix caching 未启用/旧版）或 prompt 为 0 → null，不得误报 0%
+    cacheHit: (samples['vllm:prompt_tokens_cached_total'] && g.promptTokens > 0)
+      ? Math.min(100, (g.cachedPromptTokens / g.promptTokens) * 100)
+      : null,
   };
 }
 
@@ -544,7 +549,7 @@ function createPoller({
 
 // ---------- 渲染 + 双模式 + boot 接线（从 public/app.js + public/index.html 移植）----------
 
-const VALUE_KEYS = ['running', 'waiting', 'kv', 'gen', 'prompt', 'ttftP50', 'e2eP99'];
+const VALUE_KEYS = ['running', 'waiting', 'kv', 'gen', 'prompt', 'ttftP50', 'e2eP99', 'cacheHit'];
 const INTERVALS = [1000, 2000, 5000];         // 支持的刷新间隔
 const FETCH_TIMEOUT_MS = 8000;
 const MODE_MIN_WIDTH = 640;                  // 首开自动选模式阈值
@@ -637,6 +642,7 @@ const NUMCARDS = {
   'v-preem': { fmt: (v) => fmtN(v) },
   'v-mem': { fmt: (v) => String(Math.round(v)) },
   'v-spec': { fmt: (v) => (v * 100).toFixed(1) + '%' },
+  'v-cache': { fmt: (v) => v == null ? '–' : v.toFixed(1) },
 };
 const shown = new Map(); // 各卡片当前显示值（作为下次动画起点）
 const anims = new Map(); // 卡片 id → { from, to, t0 }
@@ -690,7 +696,8 @@ const CHARTS = [
     { label: 'running', color: '#4d7fd6', key: 'running', fmt: fmtN },
     { label: 'waiting', color: '#e09b3f', key: 'waiting', fmt: fmtN } ] },
   { cv: 'c2', lg: 'lg2', unit: '%', fixed: 100, series: [
-    { label: 'kv_cache', color: '#8a76d9', key: 'kv', fmt: (v) => v == null ? '–' : v.toFixed(1) } ] },
+    { label: 'kv_cache', color: '#8a76d9', key: 'kv', fmt: (v) => v == null ? '–' : v.toFixed(1) },
+    { label: 'cache_hit', color: '#2aa8a0', key: 'cacheHit', fmt: (v) => v == null ? '–' : v.toFixed(1) } ] },
   { cv: 'c3', lg: 'lg3', unit: 'tok/s', fixed: false, series: [
     { label: 'generation', color: '#2f9e77', key: 'gen', axis: 'right', fmt: fmtN },
     { label: 'prompt', color: '#59a8dc', key: 'prompt', axis: 'left', skipZero: true, fmt: fmtN } ] },
@@ -890,6 +897,7 @@ function renderUp(snap) {
   const kvCard = $('card-kv');
   kvCard.classList.toggle('kv-hot', g.kvPct >= 90);
   kvCard.classList.toggle('kv-warm', g.kvPct >= 70 && g.kvPct < 90);
+  animTo('v-cache', snap.cacheHit);
   animTo('v-gen', snap.rates?.generationTokensPerS ?? null);
   animTo('v-prompt', snap.rates?.promptTokensPerS ?? null);
   animTo('v-ttft', snap.hist['time_to_first_token_seconds']?.p50);
@@ -931,6 +939,7 @@ function renderSnapshot(targetId, snap) {
     pushRing(st.prompt, snap.rates?.promptTokensPerS ?? null);
     pushRing(st.ttftP50, snap.hist['time_to_first_token_seconds']?.p50 ?? null);
     pushRing(st.e2eP99, snap.hist['e2e_request_latency_seconds']?.p99 ?? null);
+    pushRing(st.cacheHit, snap.cacheHit);
     st.ts.push(snap.ts);
     evict(st, snap.ts, windowMs);
   } else {
@@ -996,6 +1005,7 @@ function makeUISnap(t, text) {
     engines: snap.engines,
     specDecode: snap.specDecode,
     hist: snap.hist,
+    cacheHit: snap.cacheHit,
   };
 }
 
