@@ -149,8 +149,64 @@ function computeRates(history) {
   };
 }
 
+// ---------- 实例模型 + 安全持久化 + 失败分类 ----------
+
+const TARGETS_KEY = 'vllmmon.targets';
+
+function metricsUrlOf(baseURL, metricsPath) {
+  return new URL(baseURL).origin + (metricsPath || '/metrics');
+}
+
+function makeTarget(input) {
+  const name = (input.name || '').trim();
+  if (!name) throw new Error('name 不能为空');
+  let u;
+  try { u = new URL(input.baseURL); } catch { throw new Error('baseURL 无效'); }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new Error('baseURL 必须是 http(s)');
+  return {
+    id: input.id || name + '-' + Date.now().toString(36),
+    name,
+    baseURL: u.href,
+    metricsPath: input.metricsPath || '',
+    apiKey: input.apiKey || '',
+    enabled: input.enabled !== false,
+  };
+}
+
+function loadTargets(storage) {
+  if (!storage) return { targets: [], storageOk: false };
+  let raw;
+  try { raw = storage.getItem(TARGETS_KEY); } catch { return { targets: [], storageOk: false }; }
+  if (raw == null) return { targets: [], storageOk: true };
+  let arr;
+  try { arr = JSON.parse(raw); } catch { return { targets: [], storageOk: true }; }
+  if (!Array.isArray(arr)) return { targets: [], storageOk: true };
+  const targets = [];
+  for (const t of arr) {
+    try { targets.push(makeTarget(t)); } catch { /* 坏条目丢弃 */ }
+  }
+  return { targets, storageOk: true };
+}
+
+function saveTargets(storage, targets) {
+  if (!storage) return false;
+  try { storage.setItem(TARGETS_KEY, JSON.stringify(targets)); return true; } catch { return false; }
+}
+
+function classifyFailure(input) {
+  if (input.status != null) {
+    if (input.status === 200) return { code: 'ok', msg: '' };
+    if (input.status === 404) return { code: 'http', msg: 'HTTP 404：端点不存在 — 请在 metricsPath 指定实际路径（如 /vllm/metrics）' };
+    if (input.status === 401 || input.status === 403) return { code: 'auth', msg: 'HTTP 401/403：鉴权失败 — 请检查 apiKey' };
+    return { code: 'http', msg: 'HTTP ' + input.status };
+  }
+  const name = input.error && input.error.name;
+  if (name === 'TimeoutError' || name === 'AbortError') return { code: 'timeout', msg: '超时（8s）' };
+  return { code: 'blocked', msg: '网络不可达或 CORS 拦截' };
+}
+
 // ---------- Node 测试钩子（固定尾部，勿动）----------
-if (typeof module !== 'undefined' && module.exports) module.exports = { parseLabels, parseProm, sumSeries, histogram, percentile, HISTS, buildSnapshot, computeRates };
+if (typeof module !== 'undefined' && module.exports) module.exports = { parseLabels, parseProm, sumSeries, histogram, percentile, HISTS, buildSnapshot, computeRates, metricsUrlOf, makeTarget, loadTargets, saveTargets, classifyFailure };
 if (typeof document !== 'undefined' && typeof boot === 'function' && document.getElementById) boot();
 </script>
 </body>
