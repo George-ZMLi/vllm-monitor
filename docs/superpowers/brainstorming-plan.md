@@ -9,9 +9,16 @@
 2. （Visual Companion — 按需才提，目前无视觉问题）
 3. 🔄 澄清问题（逐个问）
    - [x] Q1 优化方向 → 全选 + 硬约束（单文件静态、零依赖、微信可打开）
-   - [x] Q2 打开方式 → 纯本地文件 + localStorage（不托管）；内置 gagag/office 默认实例（均无需 key）
+   - [x] Q2 打开方式 → 纯本地文件 + localStorage（不托管）
+   - [x] Q3（用户追加）→ **仓库内禁止出现任何 baseURL/API key**：首次打开为空实例列表 + 添加界面，用户自填端点；已对 main 基线做 sanitization（config.json.example 占位、server.mjs/monitor.html/public 的 gagag 种子与占位符全部去除），`git grep` 验证 0 残留
    - [ ] 其余设计细节由我定
-4. 🔄 提出 2-3 个方案 + 权衡 + 推荐（进行中）
+
+**git 工作区（using-git-worktrees，用户明确偏好）**：
+- 仓库 `/Users/enterlink_tech/Enter-Link/Project/George/vllm-monitor`；main@3db5aaf=基线（已 sanitization）；开发分支 `feat/static-single-file`
+- 原始 `Documents/Default Project/vllm-monitor` 未动；用户稍后自建 GitHub repo 供 push
+
+4. ✅ 方案对比 → 用户选定 **方案 3：双模式（精简/完整）单文件**
+5. 🔄 分段设计：第 1 段（架构/管线/双模式原则）✅；第 2 段（实例管理，修订为"无内置 URL 种子"）✅；第 3 段（双模式视图与移动布局）✅；第 4 段（性能/稳定性 + 迁移清理）进行中
 5. ⬜ 分段呈现设计，逐段确认
 6. ⬜ 写 spec 到 `docs/superpowers/specs/2026-10-08-vllm-monitor-static-design.md` 并提交（注意：项目非 git 仓库，spec 落地前需确认是否初始化 git）
 7. ⬜ spec 自审（占位符/矛盾/歧义/范围）
