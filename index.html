@@ -359,7 +359,7 @@ function buildSnapshot(samples) {
   const g = {
     running: sumSeries(samples, 'vllm:num_requests_running') ?? 0,
     waiting: sumSeries(samples, 'vllm:num_requests_waiting') ?? 0,
-    kvPct: sumSeries(samples, 'vllm:kv_cache_usage_perc') ?? 0,
+    kvPct: (sumSeries(samples, 'vllm:kv_cache_usage_perc') ?? 0) * 100, // vLLM 该指标为 0–1 分数（HELP: "1 means 100 percent usage"），转百分数
     preemptions: sumSeries(samples, 'vllm:num_preemptions_total') ?? 0,
     promptTokens: sumSeries(samples, 'vllm:prompt_tokens_total') ?? 0,
     generationTokens: sumSeries(samples, 'vllm:generation_tokens_total') ?? 0,

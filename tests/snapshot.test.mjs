@@ -25,7 +25,7 @@ test('buildSnapshot: gauge/成功分布/直方图/模型', () => {
   const s = buildSnapshot(parseProm(FIX));
   assert.equal(s.gauges.running, 4);
   assert.equal(s.gauges.waiting, 2);
-  assert.equal(s.gauges.kvPct, 0.42);
+  assert.equal(s.gauges.kvPct, 42); // fixture 0.42（0–1 分数）→ 42%
   assert.equal(s.gauges.residentMb, 2048);
   assert.ok(deepEqual(s.successByReason, { stop: 41, length: 4 }));
   assert.equal(s.successTotal, 45);
