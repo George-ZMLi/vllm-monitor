@@ -46,6 +46,18 @@ vllm:spec_decode_num_draft_tokens_total 100
 vllm:spec_decode_num_accepted_tokens_total 80`));
   assert.ok(deepEqual(s.specDecode, { drafts: 100, accepted: 80, acceptRate: 0.8 }));
 });
+test('buildSnapshot: cacheHit 命中率 = cached/prompt×100（FIX 300/1000 → 30）', () => {
+  const s = buildSnapshot(parseProm(FIX));
+  assert.equal(s.cacheHit, 30); // 300/1000×100
+});
+test('buildSnapshot: 缺 cached 指标 → cacheHit null（缺失不得误报 0）', () => {
+  const s = buildSnapshot(parseProm(FIX.replace('vllm:prompt_tokens_cached_total 300\n', '')));
+  assert.equal(s.cacheHit, null);
+});
+test('buildSnapshot: prompt_tokens_total 为 0 → cacheHit null（除零保护）', () => {
+  const s = buildSnapshot(parseProm(FIX.replace('vllm:prompt_tokens_total 1000', 'vllm:prompt_tokens_total 0')));
+  assert.equal(s.cacheHit, null);
+});
 test('computeRates: 正常差值 / 计数器回退 null / 单条 null / 同 ts null', () => {
   const r = computeRates([
     { ts: 0, c: { prompt: 100, generation: 1000, success: 10, preemptions: 1 } },

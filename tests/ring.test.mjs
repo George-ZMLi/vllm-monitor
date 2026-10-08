@@ -14,8 +14,9 @@ test('evict: ts < cut 全部 shift（含值 null 的点），ts === cut 保留�
     prompt: [null, null, null, null],
     ttftP50: [null, 0.5, 0.6, 0.7],
     e2eP99: [1, null, null, 1.2],
+    cacheHit: [null, 30, 37, 37],
   };
-  assert.equal(VALUE_KEYS.length, 7);
+  assert.equal(VALUE_KEYS.length, 8);
   assert.ok(deepEqual(st.ts.map((t) => t), [50000, 99999, 100000, 150000]));
   evict(st, 1900000, 1800000);
   assert.ok(deepEqual(st.ts, [100000, 150000]));            // 恰好等于 cut 的点保留
