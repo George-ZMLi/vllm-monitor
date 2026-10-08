@@ -509,7 +509,7 @@ git commit -m "feat: page shell, dual-mode render, poller wiring, mock metrics s
 - [ ] **Step 2: 手工验证（mock server 在跑）**
 
 1. 添加 `mock`（`http://127.0.0.1:8931`）→ 测试连接绿 "连接成功：模型 mock-model，含 vllm:* 指标 N 条"（Review Focus #2 的正向对照）
-2. 添加 `bad404`（baseURL `http://127.0.0.1:8931/nope/v1`，metricsPath 留空）→ 诊断文案含 "metricsPath"（**Review Focus #2**）；再填 metricsPath=`/vllm/metrics` 并把 baseURL 改 `http://127.0.0.1:8931/vllm/v1` → 成功
+2. 添加 `bad404`（baseURL `http://127.0.0.1:8931/v1`，metricsPath=`/nope/metrics` —— metrics URL = `new URL(baseURL).origin + metricsPath`，baseURL 的 path 会被剥离，所以 404 只能由 metricsPath 触发）→ 诊断文案含 "metricsPath"（**Review Focus #2**）；再把 metricsPath 改 `/vllm/metrics`、baseURL 改 `http://127.0.0.1:8931/vllm/v1` → 成功
 3. 添加 `auth`（baseURL `http://127.0.0.1:8931/authz/v1`，metricsPath=`/authz/metrics`）：不填 key → 401 诊断"请检查 apiKey"；填 `mock-key` → 成功；DevTools 确认该 key 只出现在发往 8931 端点的请求里（注：mock 的 `/metrics` 本身 200，空 metricsPath 不会 404，所以本步直接填 `/authz/metrics`）
 4. 关掉某实例的 enabled → mock 日志中该端点请求停止，状态点灰；重新打开 → 恢复
 5. `kill` mock server → 各 pill 变红 + banner 出现；重启 mock → 一拍后自动恢复、banner 消失
