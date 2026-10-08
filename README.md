@@ -8,7 +8,17 @@
 
 - **添加实例**：打开页面后添加实例 — `名称` + `baseURL`（如 `https://your-vllm.example.com/v1`），可选 `metricsPath`（默认 `/metrics`，如果你的端点在 `/vllm/metrics` 等路径就填它）和 `apiKey`。
 - **关于 API Key**：vLLM 的 `--api-key` 只保护 OpenAI 兼容的 API 路由（`/v1/*`），通常 `/metrics` 端点本身**不需要 key**；只有当你的网关对 metrics 也做了鉴权时才需要填 key（以 Bearer 头发送）。
-- **手机端**：把 `index.html` 通过微信（或任意方式）发给自己，点开即可用 — 数据只存在浏览器本地 localStorage，不上传任何服务器；页面切到后台/隐藏时自动停止轮询，省流量省电。
+- **手机端**：普通浏览器可正常打开（双击 / `file://`）；**微信内请使用托管链接**（X5 内核无法执行本地 .html），见下方「移动端 / 微信使用（GitHub Pages）」 — 数据只存在浏览器本地 localStorage，不上传任何服务器；页面切到后台/隐藏时自动停止轮询，省流量省电。
+
+## 移动端 / 微信使用（GitHub Pages）
+
+微信内置浏览器（X5 内核）的安全策略**不能执行本地 .html**（白屏 / 无反应 / 显示源码），手机端需要通过托管链接打开：
+
+1. **启用 GitHub Pages**（需 repo **owner** 权限；collaborator 无权限启用 Pages）：GitHub repo → **Settings → Pages → Build and deployment → Deploy from a branch** → 分支 `feat/static-single-file`、文件夹 `/ (root)`。首次部署生效约需 1 分钟。
+2. 页面地址为 **`https://george-zmli.github.io/vllm-monitor/`**（仓库自身的公开 Pages 资产，非机密），把该链接发到手机微信即可点开使用。
+3. **任何设备首次打开**都需要先添加 vLLM 实例（base URL / metrics 路径 / key）并测试连接；配置存于**该设备**浏览器的 localStorage，换设备（或清除浏览器数据）需重新填写。
+
+桌面双击 `index.html`（`file://` 路径）继续可用，与托管链接互不影响。
 
 ## server 版（旧）
 
