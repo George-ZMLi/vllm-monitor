@@ -393,8 +393,10 @@ function buildSnapshot(samples) {
   }
   const drafts = sumSeries(samples, 'vllm:spec_decode_num_draft_tokens_total');
   const accepted = sumSeries(samples, 'vllm:spec_decode_num_accepted_tokens_total');
+  const models = distinctLabel(samples, 'vllm:num_requests_running', 'model_name');
   return {
-    model: distinctLabel(samples, 'vllm:num_requests_running', 'model_name')[0] ?? null,
+    model: models[0] ?? null, // 兼容旧字段；全量列表见 models
+    models,
     engines: distinctLabel(samples, 'vllm:num_requests_running', 'engine'),
     gauges: g,
     successByReason,
@@ -888,6 +890,13 @@ function refreshActive() {
   CHARTS.forEach((c) => { draw(c); legend(c); });
 }
 
+// 多模型展示：无模型 → –；≤2 全列（a · b）；>2 前 2 个 + "+N"
+function modelLabel(models) {
+  const ms = models || [];
+  if (ms.length === 0) return '–';
+  return ms.length <= 2 ? ms.join(' · ') : ms.slice(0, 2).join(' · ') + ' +' + (ms.length - 2);
+}
+
 // 卡片 + 图表批量刷新（DOM 走缓存元素 textContent，每拍一次）
 function renderUp(snap) {
   const g = snap.gauges;
@@ -907,7 +916,7 @@ function renderUp(snap) {
     Object.entries(snap.successByReason || {}).filter(([, v]) => v > 0).map(([k, v]) => k + ' ' + v).join(' · ') || 'finished requests';
   animTo('v-preem', g.preemptions);
   animTo('v-mem', g.residentMb);
-  setNum('v-model', snap.model || '–');
+  setNum('v-model', modelLabel(snap.models));
   $('s-engines').textContent = snap.engines?.length ? 'engines: ' + snap.engines.length : 'engines: –';
   if (snap.specDecode) {
     $('card-spec').hidden = false;
@@ -957,11 +966,15 @@ function renderSnapshot(targetId, snap) {
 // 测试连接（添加实例前）：单次抓取，与 poller 共用 fetch 接线；结果按 classifyFailure 分类
 function testConnection(t) {
   return fetchMetrics(metricsUrlOf(t.baseURL, t.metricsPath), t)
-    .then((text) => ({
-      ok: true,
-      model: buildSnapshot(parseProm(text)).model,
-      vllmCount: text.split('\n').filter((l) => l.includes('vllm:')).length,
-    }))
+    .then((text) => {
+      const snap = buildSnapshot(parseProm(text));
+      return {
+        ok: true,
+        model: snap.model, // 兼容旧字段
+        models: snap.models,
+        vllmCount: text.split('\n').filter((l) => l.includes('vllm:')).length,
+      };
+    })
     .catch((err) => {
       const f = classifyFailure(err && err.status != null ? { status: err.status } : { error: err });
       return { ok: false, msg: f.msg, level: err && err.status === 404 ? 'warn' : 'err' };
@@ -1002,6 +1015,7 @@ function makeUISnap(t, text) {
     successTotal: snap.successTotal,
     successByReason: snap.successByReason,
     model: snap.model,
+    models: snap.models,
     engines: snap.engines,
     specDecode: snap.specDecode,
     hist: snap.hist,
@@ -1160,7 +1174,7 @@ async function addInstance() {
   activeId = t.id;
   applyTargets(list);
   btn.disabled = false;
-  msg.textContent = `连接成功：模型 ${r.model || '–'}，含 vllm:* 指标 ${r.vllmCount} 条`;
+  msg.textContent = `连接成功：模型 ${modelLabel(r.models)}，含 vllm:* 指标 ${r.vllmCount} 条`;
   msg.className = 'merr ok';
   setTimeout(closeModal, 700); // 成功提示短暂可见后自动关闭
 }

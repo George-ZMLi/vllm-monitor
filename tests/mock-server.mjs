@@ -27,6 +27,14 @@ function fixture() {
   ].join('\n') + '\n';
 }
 
+// 双模型端点：num_requests_running 用两个 model_name label 组（各 1 条，值 2 / 3），其余指标同主 fixture（全占位符）
+function multiFixture() {
+  return fixture().replace(
+    'vllm:num_requests_running{engine="0",model_name="mock-model"} 3\nvllm:num_requests_running{engine="1",model_name="mock-model"} 1\n',
+    'vllm:num_requests_running{engine="0",model_name="mock-model-a"} 2\nvllm:num_requests_running{engine="0",model_name="mock-model-b"} 3\n',
+  );
+}
+
 const server = http.createServer((req, res) => {
   console.log(`${new Date().toISOString()} ${req.method} ${req.url}`);
   const headers = {
@@ -57,6 +65,11 @@ const server = http.createServer((req, res) => {
       }
       res.writeHead(200, headers);
       res.end(isHead ? undefined : fixture());
+      return;
+    }
+    if (req.url === '/multi/metrics') {
+      res.writeHead(200, headers);
+      res.end(isHead ? undefined : multiFixture());
       return;
     }
     // /nope/metrics 及未知路径
