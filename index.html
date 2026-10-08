@@ -234,6 +234,11 @@
       <option value="lite">精简</option>
       <option value="full">完整</option>
     </select>
+    <select id="window" title="数据窗口" aria-label="数据窗口">
+      <option value="600000">10 分钟</option>
+      <option value="1800000">30 分钟</option>
+      <option value="3600000">60 分钟</option>
+    </select>
     <span class="dot" id="dot"></span><span id="updated">等待数据…</span>
   </div>
 </header>
@@ -537,17 +542,19 @@ function createPoller({
 
 // ---------- 渲染 + 双模式 + boot 接线（从 public/app.js + public/index.html 移植）----------
 
-const RING_MAX = 2400;                       // 每实例保留 2400 个采样点
+const VALUE_KEYS = ['running', 'waiting', 'kv', 'gen', 'prompt', 'ttftP50', 'e2eP99'];
 const INTERVALS = [1000, 2000, 5000];         // 支持的刷新间隔
 const FETCH_TIMEOUT_MS = 8000;
 const MODE_MIN_WIDTH = 640;                  // 首开自动选模式阈值
 const INTERVAL_KEY = 'vllmmon.interval';
 const MODE_KEY = 'vllmmon.mode';
 const ACTIVE_KEY = 'vllmmon.active';
+const WINDOWS = [600000, 1800000, 3600000];   // 数据窗口：10 / 30 / 60 分钟
+const WINDOW_KEY = 'vllmmon.window';
 const FIXED_UA = 'vllm-monitor';              // 固定非空 UA
 
 const targets = [];                          // 实例列表；poller 共享此引用，applyTargets 原地增删
-const store = new Map();                      // target.id -> 环形缓冲 { running, waiting, kv, gen, prompt, ttftP50, e2eP99 }
+const store = new Map();                       // target.id -> 环形缓冲 { ts, ...VALUE_KEYS }
 const histories = new Map();                 // target.id -> [{ ts, c }]（供 computeRates 取相邻两点）
 const dotEls = new Map();                    // target.id -> pill 状态点元素
 const failedSet = new Set();                 // 处于失败退避中的 target.id
@@ -557,12 +564,32 @@ let poller = null;
 let intervalMs = 2000;
 let activeId = null;
 let mode = 'full';
+let windowMs = 1800000;                     // 当前数据窗口（默认 30 分钟）；boot 读 vllmmon.window，非法回落
 
 function getStore(id) {
-  if (!store.has(id)) store.set(id, { running: [], waiting: [], kv: [], gen: [], prompt: [], ttftP50: [], e2eP99: [] });
+  if (!store.has(id)) {
+    const st = { ts: [] };
+    for (const k of VALUE_KEYS) st[k] = [];
+    store.set(id, st);
+  }
   return store.get(id);
 }
-function pushRing(arr, v) { arr.push(v); if (arr.length > RING_MAX) arr.shift(); }
+function pushRing(arr, v) { arr.push(v); }   // 环形长度由 evict 时间窗口界定，push 不再自截断
+function evict(st, nowMs, windowMs) {        // 时间窗口环形缓冲：ts[0] < now−window 时 ts 与全部值数组同步 shift（=== 保留）
+  while (st.ts.length && st.ts[0] < nowMs - windowMs) {
+    st.ts.shift();
+    for (const k of VALUE_KEYS) st[k].shift();
+  }
+}
+function xFrac(ts, t0, t1) {                 // X 轴比例（夹 0..1）；d<=0 返回 1（空 store / t0===t1 不产生 NaN）
+  const d = t1 - t0;
+  return d <= 0 ? 1 : Math.min(1, Math.max(0, (ts - t0) / d));
+}
+function pickTickStep(windowMs) {            // X 轴刻度步长（分钟）：窗口分钟数/步长 <= 6 的首个梯级值
+  const windowMin = windowMs / 60000;
+  for (const step of [1, 2, 5, 10, 15, 30, 60, 120, 240]) if (windowMin / step <= 6) return step;
+  return 240;
+}
 function $(id) {
   if (!elCache.has(id)) elCache.set(id, document.getElementById(id));
   return elCache.get(id);
@@ -595,6 +622,10 @@ function shortVal(v) {
   return v.toFixed(2);
 }
 const activeName = () => (targets.find((t) => t.id === activeId) || {}).name || '';
+function footText() {
+  const t = targets.find((x) => x.id === activeId);
+  return `实例 ${activeName()} · 抓取 ${t ? metricsUrlOf(t.baseURL, t.metricsPath) : '–'} · 每 ${intervalMs / 1000}s · 窗口 ${windowMs / 60000} 分钟（仅内存）`;
+}
 
 const CHARTS = [
   { cv: 'c1', lg: 'lg1', unit: '', fixed: false, series: [
@@ -645,22 +676,32 @@ function draw(c) {
     const val = yMax * (1 - i / 4);
     ctx.fillText(c.unit === '%' ? Math.round(val) + '%' : shortVal(val), padL - 6, y);
   }
+  // X 轴 = 实时时钟：t1 每次绘制现取（不得缓存，Review Focus 3）；左边界 = max(首个数据点, now − 窗口)
+  const t1 = Date.now();
+  const t0 = Math.max(st.ts[0] ?? t1, t1 - windowMs);
+  const X = (ts) => padL + pw * xFrac(ts, t0, t1);
   ctx.textBaseline = 'top';
   ctx.fillStyle = 'rgba(129, 149, 176, .8)';
-  const mins = Math.round(RING_MAX * intervalMs / 60000);
-  ctx.textAlign = 'left';
-  ctx.fillText('-' + mins + 'm', padL, h - padB + 8);
+  // 刻度对齐真实时钟：first 为 ≥ t0 的首个网格线，每刻度 3px 短竖线 + HH:MM 标签；右端保留 now
+  const stepMin = pickTickStep(windowMs);
+  const stepMs = stepMin * 60000;
+  ctx.strokeStyle = 'rgba(129, 149, 176, .5)';
+  ctx.textAlign = 'center';
+  for (let t = Math.ceil(t0 / stepMs) * stepMs; t <= t1; t += stepMs) {
+    const x = X(t);
+    ctx.beginPath(); ctx.moveTo(x, h - padB); ctx.lineTo(x, h - padB + 3); ctx.stroke();
+    ctx.fillText(new Date(t).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false }), x, h - padB + 6);
+  }
   ctx.textAlign = 'right';
-  ctx.fillText('now', w - padR, h - padB + 8);
-  // 折线（右对齐窗口，null = 缺数据断开；点数过多按像素抽稀）
+  ctx.fillText('now', w - padR, h - padB + 6);
+  // 折线（null = 缺数据断线；点数过多按像素抽稀；第 i 点 x 坐标 = st.ts[i]）
   const maxPts = Math.max(2, Math.floor(pw / 2));
   for (const s of series) {
-    const vals = s.data.slice(-RING_MAX);
-    const pad = RING_MAX - vals.length;
+    const vals = s.data;
     const step = Math.max(1, Math.ceil(vals.length / maxPts));
     const idx = [];
     for (let i = 0; i < vals.length; i += step) idx.push(i);
-    if (idx[idx.length - 1] !== vals.length - 1) idx.push(vals.length - 1); // 末端点必画
+    if (vals.length && idx[idx.length - 1] !== vals.length - 1) idx.push(vals.length - 1); // 末端点必画
     ctx.strokeStyle = s.color;
     ctx.lineWidth = 1.5;
     ctx.lineJoin = 'round';
@@ -669,7 +710,7 @@ function draw(c) {
     for (const i of idx) {
       const v = vals[i];
       if (v == null || !isFinite(v)) { started = false; continue; }
-      const x = padL + pw * ((i + pad) / (RING_MAX - 1));
+      const x = X(st.ts[i]);
       if (!started) { ctx.moveTo(x, Y(v)); started = true; }
       else ctx.lineTo(x, Y(v));
     }
@@ -736,8 +777,7 @@ function renderUp(snap) {
   document.body.classList.remove('stale');
   $('dot').classList.remove('down');
   $('updated').textContent = '更新 ' + new Date(snap.ts).toLocaleTimeString('zh-CN', { hour12: false });
-  $('foot').textContent =
-    `实例 ${activeName()} · 抓取 ${snap.metricsUrl} · 每 ${intervalMs / 1000}s · 历史 ${RING_MAX} 点（约 ${Math.round(RING_MAX * intervalMs / 60000)} 分钟，仅保存在内存中）`;
+  $('foot').textContent = footText();
   CHARTS.forEach((c) => { draw(c); legend(c); });
 }
 
@@ -757,8 +797,12 @@ function renderSnapshot(targetId, snap) {
     pushRing(st.prompt, snap.rates?.promptTokensPerS ?? null);
     pushRing(st.ttftP50, snap.hist['time_to_first_token_seconds']?.p50 ?? null);
     pushRing(st.e2eP99, snap.hist['e2e_request_latency_seconds']?.p99 ?? null);
+    st.ts.push(snap.ts);
+    evict(st, snap.ts, windowMs);
   } else {
-    for (const k of Object.keys(st)) pushRing(st[k], null); // 断档，图中留空
+    for (const k of VALUE_KEYS) pushRing(st[k], null); // 断档：时间轴留空档（遍历 Object.keys(st) 会污染 ts，必须废弃）
+    st.ts.push(Date.now());
+    evict(st, Date.now(), windowMs);
   }
   const dot = dotEls.get(targetId);
   if (dot) dot.classList.toggle('down', !snap.up);
@@ -1027,6 +1071,10 @@ function boot() {
   let savedI = null;
   try { savedI = storageRef ? storageRef.getItem(INTERVAL_KEY) : null; } catch { /* 忽略 */ }
   intervalMs = INTERVALS.includes(Number(savedI)) ? Number(savedI) : 2000;
+  // 数据窗口：vllmmon.window 缺省 1800000（30 分钟）；非法值回落默认
+  let savedW = null;
+  try { savedW = storageRef ? storageRef.getItem(WINDOW_KEY) : null; } catch { /* 忽略 */ }
+  windowMs = WINDOWS.includes(Number(savedW)) ? Number(savedW) : 1800000;
 
   // 模式：vllmmon.mode 缺省按 innerWidth < 640 自动选 lite/full；手动选择持久化优先
   let savedMode = null;
@@ -1044,6 +1092,16 @@ function boot() {
     intervalMs = Number($('interval').value);
     try { if (storageRef) storageRef.setItem(INTERVAL_KEY, String(intervalMs)); } catch { /* 忽略 */ }
     restartPoller();
+  });
+  // 数据窗口：vllmmon.window（10/30/60 分钟）；切换 → 持久化 + 全体 store evict + 重绘全部图表 + 刷新页脚
+  $('window').value = String(windowMs);
+  $('window').addEventListener('change', () => {
+    windowMs = Number($('window').value);
+    try { if (storageRef) storageRef.setItem(WINDOW_KEY, String(windowMs)); } catch { /* 忽略 */ }
+    const now = Date.now();
+    for (const st of store.values()) evict(st, now, windowMs);
+    CHARTS.forEach(draw);
+    if (activeId) $('foot').textContent = footText();
   });
 
   setMode(savedMode, false);
@@ -1063,7 +1121,7 @@ function boot() {
 }
 
 // ---------- Node 测试钩子（固定尾部，勿动）----------
-if (typeof module !== 'undefined' && module.exports) module.exports = { parseLabels, parseProm, sumSeries, histogram, percentile, HISTS, buildSnapshot, computeRates, metricsUrlOf, makeTarget, loadTargets, saveTargets, classifyFailure, nextDelayMs, intervalFor, createPoller };
+if (typeof module !== 'undefined' && module.exports) module.exports = { parseLabels, parseProm, sumSeries, histogram, percentile, HISTS, buildSnapshot, computeRates, metricsUrlOf, makeTarget, loadTargets, saveTargets, classifyFailure, nextDelayMs, intervalFor, createPoller, VALUE_KEYS, evict, xFrac, pickTickStep };
 if (typeof document !== 'undefined' && typeof boot === 'function' && document.getElementById) boot();
 </script>
 </body>
