@@ -94,6 +94,22 @@
   .pill.active .st { background: #fff; }
   .pill.active .st.down { background: var(--err); }
   .pill.active .x { color: #fff; }
+  .pill .st.off { background: #b8c4d4; box-shadow: none; }
+  .pill .tg {
+    position: relative; width: 26px; height: 15px; border-radius: 999px; flex: none;
+    background: #b8c4d4; transition: background .15s;
+  }
+  .pill .tg::after {
+    content: ''; position: absolute; top: 2px; left: 2px; width: 11px; height: 11px;
+    border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(34, 54, 79, .25);
+    transition: left .15s;
+  }
+  .pill .tg.on { background: var(--ok); }
+  .pill .tg.on::after { left: 13px; }
+  .pill.active .st.off { background: rgba(255, 255, 255, .5); }
+  .pill.active .tg { background: rgba(255, 255, 255, .4); }
+  .pill.active .tg.on { background: #fff; }
+  .pill.active .tg.on::after { background: var(--ok); }
   .pill.add { border-style: dashed; background: transparent; padding: 5px 13px; }
   .pill.add:hover { color: var(--accent); border-color: var(--accent); }
 
@@ -101,7 +117,7 @@
   .banner {
     margin: 14px auto 0; width: fit-content; max-width: calc(100% - 44px);
     padding: 9px 14px; border: 1px solid #f3c8ce; background: #fdeeef; color: #a3323f;
-    border-radius: 10px; font-size: 13px;
+    border-radius: 10px; font-size: 13px; white-space: pre-line;
   }
   #toast {
     position: fixed; top: 66px; left: 50%; transform: translateX(-50%); z-index: 60;
@@ -157,7 +173,8 @@
   body.mode-lite .pill,
   body.mode-lite .meta select,
   body.mode-lite .btn,
-  body.mode-lite .cta { min-height: 44px; }
+  body.mode-lite .cta,
+  body.mode-lite .modal label.chk { min-height: 44px; }
   body.mode-lite .card { min-height: 44px; }
 
   /* ---------- 添加实例弹窗（挂载到 #modal-root） ---------- */
@@ -191,6 +208,16 @@
   .btn.ghost { background: transparent; border: 1px solid var(--border); color: var(--dim); }
   .btn.ghost:hover { color: var(--text); border-color: var(--dim); }
   .merr { margin-top: 12px; font-size: 12px; color: var(--err); }
+  .merr.warn { color: var(--warn); }
+  .merr.ok { color: var(--ok); }
+  .merr.dim { color: var(--dim); }
+  .modal label.chk {
+    display: flex; align-items: center; gap: 8px; cursor: pointer;
+    font-size: 12.5px; font-weight: 500; letter-spacing: 0; text-transform: none; color: var(--text);
+  }
+  .modal input[type="checkbox"] {
+    display: inline-block; flex: none; width: 16px; height: 16px; margin: 0; accent-color: var(--accent);
+  }
 </style>
 </head>
 <body>
@@ -740,6 +767,20 @@ function renderSnapshot(targetId, snap) {
 
 // ---------- 抓取 + 轮询接线 ----------
 
+// 测试连接（添加实例前）：单次抓取，与 poller 共用 fetch 接线；结果按 classifyFailure 分类
+function testConnection(t) {
+  return fetchMetrics(metricsUrlOf(t.baseURL, t.metricsPath), t)
+    .then((text) => ({
+      ok: true,
+      model: buildSnapshot(parseProm(text)).model,
+      vllmCount: text.split('\n').filter((l) => l.includes('vllm:')).length,
+    }))
+    .catch((err) => {
+      const f = classifyFailure(err && err.status != null ? { status: err.status } : { error: err });
+      return { ok: false, msg: f.msg, level: err && err.status === 404 ? 'warn' : 'err' };
+    });
+}
+
 function fetchMetrics(url, target) {
   const headers = { 'User-Agent': FIXED_UA };
   if (target.apiKey) headers['Authorization'] = 'Bearer ' + target.apiKey;
@@ -784,17 +825,26 @@ function onSample(id, text) {
   const t = targets.find((x) => x.id === id);
   if (!t) return;
   failedSet.delete(id);
-  if (failedSet.size === 0) $('banner').hidden = true;
+  refreshBanner();
   renderSnapshot(id, makeUISnap(t, text));
 }
 
 function onFail(id, err) {
   failedSet.add(id);
-  const t = targets.find((x) => x.id === id);
   const f = classifyFailure(err && err.status != null ? { status: err.status } : { error: err });
   renderSnapshot(id, { up: false, error: f.msg });
-  $('banner').textContent = `实例 “${t ? t.name : id}” 已断连，每 5s 重试`;
-  $('banner').hidden = false;
+  refreshBanner();
+}
+
+// 任一实例失败时汇总显示（多个实例失败逐行列出）；全部恢复后自动隐藏
+function refreshBanner() {
+  const el = $('banner');
+  if (failedSet.size === 0) { el.hidden = true; el.textContent = ''; return; }
+  el.textContent = [...failedSet].map((id) => {
+    const t = targets.find((x) => x.id === id);
+    return `实例 “${t ? t.name : id}” 已断连，每 5s 重试`;
+  }).join('\n');
+  el.hidden = false;
 }
 
 // ---------- 实例管理 ----------
@@ -809,9 +859,10 @@ function renderPills() {
     b.className = 'pill' + (t.id === activeId ? ' active' : '');
     b.dataset.id = t.id;
     b.title = metricsUrlOf(t.baseURL, t.metricsPath);
-    b.innerHTML = `<i class="st"></i><span>${esc(t.name)}</span><span class="x" title="删除实例">×</span>`;
+    b.innerHTML = `<i class="st${t.enabled ? '' : ' off'}"></i><span>${esc(t.name)}</span><span class="tg${t.enabled ? ' on' : ''}" title="${t.enabled ? '点按停用' : '点按启用'}"></span><span class="x" title="删除实例">×</span>`;
     b.addEventListener('click', (ev) => {
       if (ev.target.classList.contains('x')) { ev.stopPropagation(); removeTarget(t); return; }
+      if (ev.target.classList.contains('tg')) { ev.stopPropagation(); toggleTarget(t); return; }
       setActive(t.id);
     });
     el.appendChild(b);
@@ -845,6 +896,15 @@ function removeTarget(t) {
   applyTargets(list);
 }
 
+// enabled 开关独立于删除：切换启用状态（localStorage 同步），停用后不再抓取
+function toggleTarget(t) {
+  t.enabled = !t.enabled;
+  if (!t.enabled) failedSet.delete(t.id);
+  const list = targets.slice();
+  saveTargets(storageRef, list);
+  applyTargets(list);
+}
+
 // 添加实例弹窗（挂载到 #modal-root）
 function openAddModal() {
   const root = $('modal-root');
@@ -855,24 +915,21 @@ function openAddModal() {
       <h3>添加监控实例</h3>
       <label>名称<input id="f-name" placeholder="实例名称" autocomplete="off"></label>
       <label>Base URL<input id="f-base" placeholder="https://your-vllm.example.com/v1" autocomplete="off" spellcheck="false"></label>
-      <label>metrics 路径（可选）<input id="f-path" placeholder="如 /vllm/metrics（留空默认 /metrics）" autocomplete="off"></label>
+      <label>metrics 路径（可选）<input id="f-path" placeholder="/vllm/metrics" autocomplete="off" spellcheck="false"></label>
+      <p class="hint">留空 = 自动 origin+/metrics</p>
       <label>API Key（可选）<input id="f-key" type="password" placeholder="sk-…（以 Bearer 头随请求发送）" autocomplete="off"></label>
-      <p class="hint" id="f-hint">metrics 端点将自动取为：baseURL 域名根下的 /metrics</p>
+      <p class="hint">仅存本机</p>
+      <label class="chk"><input type="checkbox" id="f-enabled" checked>添加后启用监控</label>
       <div class="mrow">
         <button class="btn ghost" id="f-cancel" type="button">取消</button>
         <button class="btn primary" id="f-add" type="button">添加</button>
       </div>
-      <p class="merr" id="f-err" hidden></p>
+      <p class="merr" id="f-msg" hidden></p>
     </div>
   </div>`;
   const q = (sel) => root.querySelector(sel);
   q('#f-cancel').addEventListener('click', closeModal);
   q('#modal').addEventListener('click', (e) => { if (e.target.id === 'modal') closeModal(); });
-  q('#f-base').addEventListener('input', () => {
-    const v = q('#f-base').value.trim();
-    try { q('#f-hint').textContent = 'metrics 端点将自动取为：' + new URL(v).origin + (q('#f-path').value.trim() || '/metrics'); }
-    catch { q('#f-hint').textContent = 'metrics 端点将自动取为：baseURL 域名根下的 /metrics'; }
-  });
   q('#f-add').addEventListener('click', addInstance);
   q('#f-name').focus();
 }
@@ -882,22 +939,42 @@ function closeModal() {
   if (root) root.innerHTML = '';
 }
 
-function addInstance() {
-  const q = (sel) => $('modal-root').querySelector(sel);
+async function addInstance() {
+  const root = $('modal-root');
+  const q = (sel) => root.querySelector(sel);
   const name = q('#f-name').value.trim();
   const baseURL = q('#f-base').value.trim();
   const metricsPath = q('#f-path').value.trim();
   const apiKey = q('#f-key').value.trim();
-  const err = q('#f-err');
-  err.hidden = true;
+  const enabled = q('#f-enabled').checked;
+  const msg = q('#f-msg');
+  const btn = q('#f-add');
+  msg.hidden = true;
   let t;
-  try { t = makeTarget({ name, baseURL, metricsPath, apiKey }); }
-  catch (e) { err.textContent = e.message || '输入无效'; err.hidden = false; return; }
+  try { t = makeTarget({ name, baseURL, metricsPath, apiKey, enabled }); }
+  catch (e) { msg.textContent = e.message || '输入无效'; msg.className = 'merr'; msg.hidden = false; return; }
+
+  // 保存前自动跑一次测试连接
+  btn.disabled = true;
+  msg.className = 'merr dim';
+  msg.textContent = '正在测试连接…';
+  msg.hidden = false;
+  const r = await testConnection(t);
+  if (root.querySelector('#modal') == null) return; // 测试期间弹窗已被关闭
+  if (!r.ok) {
+    msg.textContent = r.msg;
+    msg.className = 'merr' + (r.level === 'warn' ? ' warn' : '');
+    btn.disabled = false;
+    return;
+  }
   const list = targets.concat([t]);
   saveTargets(storageRef, list);
   activeId = t.id;
   applyTargets(list);
-  closeModal();
+  btn.disabled = false;
+  msg.textContent = `连接成功：模型 ${r.model || '–'}，含 vllm:* 指标 ${r.vllmCount} 条`;
+  msg.className = 'merr ok';
+  setTimeout(closeModal, 700); // 成功提示短暂可见后自动关闭
 }
 
 // 实例列表整体重建（供 Task 6）：重建 pills + 重启 poller
@@ -911,6 +988,7 @@ function applyTargets(list) {
   syncWelcome();
   renderPills();
   restartPoller();
+  refreshBanner();
 }
 
 function syncWelcome() {
