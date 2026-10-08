@@ -253,7 +253,7 @@ git commit -m "feat: snapshot build + delta rates (ported, counter-reset safe)"
 - Produces:
   - `metricsUrlOf(baseURL, metricsPath) -> string`（`new URL(baseURL).origin + (metricsPath || '/metrics')`）
   - `makeTarget(input) -> { id, name, baseURL, metricsPath, apiKey, enabled }`（默认 `metricsPath:''`、`apiKey:''`、`enabled:true`、`id: input.id || name + '-' + Date.now().toString(36)`；name 为空或 baseURL 非 http(s) 时 throw）
-  - `loadTargets(storage) -> { targets: valid[], storageOk: boolean }`（storage 为 null / getItem 抛异常 / 值非法 → `{ targets: [], storageOk: false }`；合法 JSON 数组 → 逐条过 `makeTarget` 校验，坏条目丢弃）
+  - `loadTargets(storage) -> { targets: valid[], storageOk: boolean }`（`storageOk` 反映**存储机制本身的健康度**：storage 为 null 或 getItem 抛异常 → `{ targets: [], storageOk: false }`；值非法（JSON 解析失败 / 非数组）→ `{ targets: [], storageOk: true }`（存储可用、只是值坏了）；合法 JSON 数组 → 逐条过 `makeTarget` 校验，坏条目丢弃）
   - `saveTargets(storage, targets) -> boolean`（storage 为 null 或 setItem 抛异常 → false，**不 throw**）
   - `classifyFailure(input) -> { code, msg }`；`input = { status }` 或 `{ error }`：
     - status 200 → `{ code:'ok', msg:'' }`
@@ -510,7 +510,7 @@ git commit -m "feat: page shell, dual-mode render, poller wiring, mock metrics s
 
 1. 添加 `mock`（`http://127.0.0.1:8931`）→ 测试连接绿 "连接成功：模型 mock-model，含 vllm:* 指标 N 条"（Review Focus #2 的正向对照）
 2. 添加 `bad404`（baseURL `http://127.0.0.1:8931/nope/v1`，metricsPath 留空）→ 诊断文案含 "metricsPath"（**Review Focus #2**）；再填 metricsPath=`/vllm/metrics` 并把 baseURL 改 `http://127.0.0.1:8931/vllm/v1` → 成功
-3. 添加 `auth`（baseURL `http://127.0.0.1:8931/authz/v1`，metricsPath 留空会自动到 `/metrics` 404 —— 需填 metricsPath=`/authz/metrics`）：不填 key → 401 诊断"请检查 apiKey"；填 `mock-key` → 成功；DevTools 确认该 key 只出现在发往 8931 端点的请求里
+3. 添加 `auth`（baseURL `http://127.0.0.1:8931/authz/v1`，metricsPath=`/authz/metrics`）：不填 key → 401 诊断"请检查 apiKey"；填 `mock-key` → 成功；DevTools 确认该 key 只出现在发往 8931 端点的请求里（注：mock 的 `/metrics` 本身 200，空 metricsPath 不会 404，所以本步直接填 `/authz/metrics`）
 4. 关掉某实例的 enabled → mock 日志中该端点请求停止，状态点灰；重新打开 → 恢复
 5. `kill` mock server → 各 pill 变红 + banner 出现；重启 mock → 一拍后自动恢复、banner 消失
 
