@@ -147,6 +147,8 @@
   .card .sub { color: var(--dim); font-size: 11px; margin-top: 4px; min-height: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .card.kv-hot .val { color: var(--err); }
   .card.kv-warm .val { color: var(--warn); }
+  .card .val.tick { animation: valpulse .5s ease; }
+  @keyframes valpulse { 0% { color: var(--accent); } }
   body.stale .card { opacity: .45; }
 
   .charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 10px; }
@@ -622,6 +624,62 @@ function shortVal(v) {
   return v.toFixed(2);
 }
 const activeName = () => (targets.find((t) => t.id === activeId) || {}).name || '';
+// ---------- 卡片数值过渡动画（350ms easeOutCubic，数值跳变时附带轻微高亮闪烁） ----------
+const NUMCARDS = {
+  'v-run': { fmt: (v) => fmtN(v) },
+  'v-wait': { fmt: (v) => fmtN(v) },
+  'v-kv': { fmt: (v) => v.toFixed(1) },
+  'v-gen': { fmt: (v) => fmtN(v) },
+  'v-prompt': { fmt: (v) => fmtN(v) },
+  'v-ttft': { fmt: (v) => fmtS(v) },
+  'v-e2e': { fmt: (v) => fmtS(v) },
+  'v-succ': { fmt: (v) => fmtN(v) },
+  'v-preem': { fmt: (v) => fmtN(v) },
+  'v-mem': { fmt: (v) => String(Math.round(v)) },
+  'v-spec': { fmt: (v) => (v * 100).toFixed(1) + '%' },
+};
+const shown = new Map(); // 各卡片当前显示值（作为下次动画起点）
+const anims = new Map(); // 卡片 id → { from, to, t0 }
+let animRaf = null;
+function animLoop(now) {
+  let alive = false;
+  for (const [id, a] of anims) {
+    const p = Math.min(1, (now - a.t0) / 350);
+    const v = a.from + (a.to - a.from) * (1 - Math.pow(1 - p, 3));
+    shown.set(id, v);
+    setNum(id, NUMCARDS[id].fmt(v));
+    if (p < 1) alive = true;
+    else anims.delete(id);
+  }
+  animRaf = alive ? requestAnimationFrame(animLoop) : null;
+}
+function animTo(id, target) {
+  const cfg = NUMCARDS[id];
+  if (!cfg) return;
+  if (target == null || !isFinite(target)) {
+    anims.delete(id);
+    shown.set(id, null);
+    setNum(id, '–');
+    return;
+  }
+  const prevShown = shown.has(id) ? shown.get(id) : null;
+  const prevTarget = anims.has(id) ? anims.get(id).to : prevShown;
+  if (prevTarget != null && Math.abs(target - prevTarget) < 1e-6) return; // 值未变化，不重启动画
+  const big = prevTarget == null || Math.abs(target - prevTarget) > Math.max(0.1 * Math.max(Math.abs(target), Math.abs(prevTarget)), 1);
+  if (big) {
+    const el = $(id);
+    el.classList.remove('tick'); void el.offsetWidth; el.classList.add('tick');
+  }
+  anims.set(id, { from: (prevShown == null || !isFinite(prevShown)) ? target : prevShown, to: target, t0: performance.now() });
+  if (!animRaf) animRaf = requestAnimationFrame(animLoop);
+}
+function resetCardAnims() {
+  shown.clear();
+  anims.clear();
+  if (animRaf) { cancelAnimationFrame(animRaf); animRaf = null; }
+  for (const id of Object.keys(NUMCARDS)) setNum(id, '–');
+}
+
 function footText() {
   const t = targets.find((x) => x.id === activeId);
   return `实例 ${activeName()} · 抓取 ${t ? metricsUrlOf(t.baseURL, t.metricsPath) : '–'} · 每 ${intervalMs / 1000}s · 窗口 ${windowMs / 60000} 分钟（仅内存）`;
@@ -814,38 +872,38 @@ function lastVal(arr) {
 function refreshActive() {
   if (!activeId) return;
   const st = getStore(activeId);
-  setNum('v-run', fmtN(lastVal(st.running)));
-  setNum('v-wait', fmtN(lastVal(st.waiting)));
+  animTo('v-run', lastVal(st.running));
+  animTo('v-wait', lastVal(st.waiting));
   const k = lastVal(st.kv);
-  if (k != null) setNum('v-kv', k.toFixed(1));
-  setNum('v-ttft', fmtS(lastVal(st.ttftP50)));
-  setNum('v-e2e', fmtS(lastVal(st.e2eP99)));
+  if (k != null) animTo('v-kv', k);
+  animTo('v-ttft', lastVal(st.ttftP50));
+  animTo('v-e2e', lastVal(st.e2eP99));
   CHARTS.forEach((c) => { draw(c); legend(c); });
 }
 
 // 卡片 + 图表批量刷新（DOM 走缓存元素 textContent，每拍一次）
 function renderUp(snap) {
   const g = snap.gauges;
-  setNum('v-run', fmtN(g.running));
-  setNum('v-wait', fmtN(g.waiting));
-  setNum('v-kv', g.kvPct.toFixed(1));
+  animTo('v-run', g.running);
+  animTo('v-wait', g.waiting);
+  animTo('v-kv', g.kvPct);
   const kvCard = $('card-kv');
   kvCard.classList.toggle('kv-hot', g.kvPct >= 90);
   kvCard.classList.toggle('kv-warm', g.kvPct >= 70 && g.kvPct < 90);
-  setNum('v-gen', fmtN(snap.rates?.generationTokensPerS ?? null));
-  setNum('v-prompt', fmtN(snap.rates?.promptTokensPerS ?? null));
-  setNum('v-ttft', fmtS(snap.hist['time_to_first_token_seconds']?.p50));
-  setNum('v-e2e', fmtS(snap.hist['e2e_request_latency_seconds']?.p99));
-  setNum('v-succ', fmtN(snap.successTotal));
+  animTo('v-gen', snap.rates?.generationTokensPerS ?? null);
+  animTo('v-prompt', snap.rates?.promptTokensPerS ?? null);
+  animTo('v-ttft', snap.hist['time_to_first_token_seconds']?.p50);
+  animTo('v-e2e', snap.hist['e2e_request_latency_seconds']?.p99);
+  animTo('v-succ', snap.successTotal);
   $('s-succ').textContent =
     Object.entries(snap.successByReason || {}).filter(([, v]) => v > 0).map(([k, v]) => k + ' ' + v).join(' · ') || 'finished requests';
-  setNum('v-preem', fmtN(g.preemptions));
-  setNum('v-mem', String(Math.round(g.residentMb)));
+  animTo('v-preem', g.preemptions);
+  animTo('v-mem', g.residentMb);
   setNum('v-model', snap.model || '–');
   $('s-engines').textContent = snap.engines?.length ? 'engines: ' + snap.engines.length : 'engines: –';
   if (snap.specDecode) {
     $('card-spec').hidden = false;
-    $('v-spec').textContent = (snap.specDecode.acceptRate * 100).toFixed(1) + '%';
+    animTo('v-spec', snap.specDecode.acceptRate);
   } else {
     $('card-spec').hidden = true;
   }
@@ -859,6 +917,7 @@ function renderUp(snap) {
 function renderDown() {
   document.body.classList.add('stale');
   $('dot').classList.add('down');
+  resetCardAnims(); // 断连：11 个数字卡全部归位 –（清 shown/anims，取消共享 rAF）
 }
 
 // 渲染入口（供 Task 6）：新数据点进环形缓冲 + 批量刷 DOM
