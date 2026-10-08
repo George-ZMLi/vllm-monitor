@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>vLLM 实时监控面板</title>
+<style>
+</style>
+</head>
+<body>
+<script>
+'use strict';
+// ---------- Prometheus 文本解析（从 server.mjs 原样移植）----------
+
+function parseLabels(s) {
+  const out = {};
+  const re = /([a-zA-Z_][a-zA-Z0-9_]*)="((?:[^"\\]|\\.)*)"/g;
+  let m;
+  while ((m = re.exec(s))) out[m[1]] = m[2].replace(/\\(.)/g, '$1');
+  return out;
+}
+
+function parseProm(text) {
+  const samples = {};
+  for (const line of text.split('\n')) {
+    if (!line || line[0] === '#') continue;
+    const m = line.match(/^([a-zA-Z_:][a-zA-Z0-9_:]*)(?:\{(.*)\})?\s+(.+)$/);
+    if (!m) continue;
+    const [, name, labelStr, valStr] = m;
+    const value = Number(valStr);
+    if (Number.isNaN(value)) continue;
+    const labels = labelStr ? parseLabels(labelStr) : {};
+    (samples[name] ??= []).push({ labels, value });
+  }
+  return samples;
+}
+
+function sumSeries(samples, name) {
+  const arr = samples[name];
+  if (!arr || !arr.length) return null;
+  let t = 0;
+  let any = false;
+  for (const s of arr) if (isFinite(s.value)) { t += s.value; any = true; }
+  return any ? t : null;
+}
+
+function histogram(samples, base) {
+  const byLe = new Map();
+  for (const s of samples[base + '_bucket'] || []) {
+    const leRaw = s.labels.le;
+    if (leRaw == null || !isFinite(s.value)) continue;
+    const le = leRaw === '+Inf' ? Infinity : Number(leRaw);
+    if (!Number.isFinite(le) && le !== Infinity) continue;
+    byLe.set(le, (byLe.get(le) || 0) + s.value);
+  }
+  const buckets = [...byLe.entries()].sort((a, b) => a[0] - b[0]);
+  const count = sumSeries(samples, base + '_count') ?? 0;
+  const sum = sumSeries(samples, base + '_sum') ?? 0;
+  return { buckets, count, sum, avg: count ? sum / count : null };
+}
+
+function percentile(buckets, count, q) {
+  if (!count || count <= 0) return null;
+  const target = q * count;
+  let prevLe = 0;
+  let prevCount = 0;
+  for (const [le, c] of buckets) {
+    if (c >= target) {
+      if (le === Infinity) return null;
+      const frac = (target - prevCount) / (c - prevCount || 1);
+      return prevLe + (le - prevLe) * Math.min(Math.max(frac, 0), 1);
+    }
+    prevLe = le;
+    prevCount = c;
+  }
+  return null;
+}
+
+// ---------- Node 测试钩子（固定尾部，勿动）----------
+if (typeof module !== 'undefined' && module.exports) module.exports = { parseLabels, parseProm, sumSeries, histogram, percentile };
+if (typeof document !== 'undefined' && typeof boot === 'function' && document.getElementById) boot();
+</script>
+</body>
+</html>
