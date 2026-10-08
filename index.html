@@ -641,6 +641,63 @@ const CHARTS = [
     { label: 'E2E p99', color: '#7c6fd0', key: 'e2eP99', axis: 'left', fmt: fmtS } ] },
 ];
 
+// 单调三次 Hermite（Fritsch–Carlson）平滑：把离散采样点连成平滑曲线，无过冲，适合 prefill 这类尖峰数据
+function drawSmooth(ctx, p) {
+  const n = p.length;
+  if (n < 2) return;
+  const xs = p.map((q) => q[0]), ys = p.map((q) => q[1]);
+  const dx = [], sl = [];
+  for (let i = 0; i < n - 1; i++) {
+    dx[i] = Math.max(xs[i + 1] - xs[i], 1e-6);
+    sl[i] = (ys[i + 1] - ys[i]) / dx[i];
+  }
+  const m = new Array(n);
+  m[0] = sl[0];
+  m[n - 1] = sl[n - 2];
+  for (let i = 1; i < n - 1; i++) m[i] = sl[i - 1] * sl[i] <= 0 ? 0 : (sl[i - 1] + sl[i]) / 2;
+  for (let i = 0; i < n - 1; i++) {
+    if (sl[i] === 0) { m[i] = 0; m[i + 1] = 0; continue; }
+    const a = m[i] / sl[i], b = m[i + 1] / sl[i];
+    const h = Math.hypot(a, b);
+    if (h > 3) { const t = 3 / h; m[i] = t * a * sl[i]; m[i + 1] = t * b * sl[i]; }
+  }
+  ctx.beginPath();
+  ctx.moveTo(xs[0], ys[0]);
+  for (let i = 0; i < n - 1; i++) {
+    const h = dx[i];
+    ctx.bezierCurveTo(xs[i] + h / 3, ys[i] + m[i] * h / 3, xs[i + 1] - h / 3, ys[i + 1] - m[i + 1] * h / 3, xs[i + 1], ys[i + 1]);
+  }
+  ctx.stroke();
+}
+// min-max 降采样：点超出预算时，每个桶取最大/最小值所在的下标参与绘制，
+// 单样本尖峰（某一拍 gen 突高）不会像等步长抽点那样被吞掉；-1 表示全 null 的桶（用于断线）
+function decimIdx(vals, n, maxPts) {
+  if (n <= maxPts) { const all = new Array(n); for (let i = 0; i < n; i++) all[i] = i; return all; }
+  const buckets = Math.max(2, Math.floor(maxPts / 2));
+  const bsize = Math.ceil(n / buckets);
+  const out = [];
+  for (let b = 0; b < buckets; b++) {
+    const lo = b * bsize, hi = Math.min(n, lo + bsize);
+    if (lo >= n) break;
+    let mnI = -1, mxI = -1;
+    for (let i = lo; i < hi; i++) {
+      const v = vals[i];
+      if (v == null || !isFinite(v)) continue;
+      if (mnI < 0 || v < vals[mnI]) mnI = i;
+      if (mxI < 0 || v > vals[mxI]) mxI = i;
+    }
+    if (mnI < 0) { out.push(-1); continue; }
+    if (mnI === mxI) { out.push(mnI); continue; }
+    if (mnI < mxI) { out.push(mnI, mxI); } else { out.push(mxI, mnI); }
+  }
+  if (out[out.length - 1] !== n - 1) {
+    const lv = vals[n - 1];
+    if (lv != null && isFinite(lv)) out.push(n - 1);
+    else if (out[out.length - 1] !== -1) out.push(-1);
+  }
+  return out;
+}
+
 // 折线图：仅在有新数据点到达时调用；canvas 按 min(DPR, 2) 缩放
 function draw(c) {
   if (!activeId) return;
@@ -707,28 +764,32 @@ function draw(c) {
   }
   ctx.textAlign = 'right';
   ctx.fillText('now', w - padR, h - padB + 6);
-  // 折线（null = 缺数据断线；点数过多按像素抽稀；第 i 点 x 坐标 = st.ts[i]）
-  const maxPts = Math.max(2, Math.floor(pw / 2));
+  // 平滑曲线 + min-max 降采样（尖峰不丢失）：抽稀取索引后 null/全 null 桶断段，每段单调曲线 + 离散圆点
+  const n = st.ts.length;
+  const maxPts = Math.max(2, Math.floor(pw / 3));
   for (const s of series) {
     const vals = s.data;
-    const step = Math.max(1, Math.ceil(vals.length / maxPts));
-    const idx = [];
-    for (let i = 0; i < vals.length; i += step) idx.push(i);
-    if (vals.length && idx[idx.length - 1] !== vals.length - 1) idx.push(vals.length - 1); // 末端点必画
+    const idx = decimIdx(vals, n, maxPts);
+    // null（抓取失败空窗）处断开，每段用单调曲线 + 离散圆点绘制
+    const segs = [];
+    let seg = [];
+    for (const i of idx) {
+      if (i < 0) { if (seg.length) { segs.push(seg); seg = []; } continue; }
+      const v = vals[i];
+      if (v == null || !isFinite(v)) { if (seg.length) { segs.push(seg); seg = []; } continue; }
+      if (s.skipZero && v === 0) continue; // 0 值不画点与线、但不断线：数据点之间直接折线连接
+      seg.push([X(st.ts[i]), Y(s, v)]);
+    }
+    if (seg.length) segs.push(seg);
     ctx.strokeStyle = s.color;
     ctx.lineWidth = 1.5;
     ctx.lineJoin = 'round';
-    ctx.beginPath();
-    let started = false;
-    for (const i of idx) {
-      const v = vals[i];
-      if (v == null || !isFinite(v)) { started = false; continue; }
-      if (s.skipZero && v === 0) continue; // 0 值不画点与线、但不断线：跳过点后 started 保持，与下一非 0 点直接连线（T3 段/点逻辑替换后自然覆盖）
-      const x = X(st.ts[i]);
-      if (!started) { ctx.moveTo(x, Y(s, v)); started = true; }
-      else ctx.lineTo(x, Y(s, v));
+    ctx.fillStyle = s.color;
+    const dotR = n > maxPts ? 1.5 : 2;
+    for (const pts of segs) {
+      drawSmooth(ctx, pts);
+      for (const [px, py] of pts) { ctx.beginPath(); ctx.arc(px, py, dotR, 0, 6.2832); ctx.fill(); }
     }
-    ctx.stroke();
   }
 }
 
@@ -1135,7 +1196,7 @@ function boot() {
 }
 
 // ---------- Node 测试钩子（固定尾部，勿动）----------
-if (typeof module !== 'undefined' && module.exports) module.exports = { parseLabels, parseProm, sumSeries, histogram, percentile, HISTS, buildSnapshot, computeRates, metricsUrlOf, makeTarget, loadTargets, saveTargets, classifyFailure, nextDelayMs, intervalFor, createPoller, VALUE_KEYS, evict, xFrac, pickTickStep };
+if (typeof module !== 'undefined' && module.exports) module.exports = { parseLabels, parseProm, sumSeries, histogram, percentile, HISTS, buildSnapshot, computeRates, metricsUrlOf, makeTarget, loadTargets, saveTargets, classifyFailure, nextDelayMs, intervalFor, createPoller, VALUE_KEYS, evict, xFrac, pickTickStep, decimIdx };
 if (typeof document !== 'undefined' && typeof boot === 'function' && document.getElementById) boot();
 </script>
 </body>
