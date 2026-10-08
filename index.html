@@ -205,8 +205,78 @@ function classifyFailure(input) {
   return { code: 'blocked', msg: '网络不可达或 CORS 拦截' };
 }
 
+// ---------- 抓取循环：链式 / 退避 / 隐藏暂停 / 无爆发 ----------
+const BACKOFF_MS = 5000;
+
+function nextDelayMs(elapsedMs, intervalMs) {
+  return Math.max(0, intervalMs - elapsedMs);
+}
+function intervalFor(failed, intervalMs, backoffMs = BACKOFF_MS) {
+  return failed ? Math.max(intervalMs, backoffMs) : intervalMs;
+}
+
+function createPoller({
+  targets,
+  fetchFn,
+  intervalMs = 2000,
+  backoffMs = BACKOFF_MS,
+  now = Date.now,
+  schedule = (fn, ms) => setTimeout(fn, ms),
+  cancel = (h) => clearTimeout(h),
+  onSample = () => {},
+  onFail = () => {},
+}) {
+  let running = false;
+  const handles = new Map(); // target -> pending timer handle（stop 时 cancel）
+  const inFlight = new Map(); // target -> 在途标记（stop 后在途完成不再重排）
+  const failed = new Map();   // target.id -> 是否处于失败退避
+
+  function run(target) {
+    if (!running) return;
+    inFlight.set(target, true);
+    const t0 = now();
+    fetchFn(metricsUrlOf(target.baseURL, target.metricsPath), target)
+      .then((resp) => {
+        if (!running) return;
+        inFlight.delete(target);
+        failed.set(target.id, false);
+        onSample(target.id, resp);
+        reschedule(target, now() - t0);
+      })
+      .catch((err) => {
+        if (!running) return;
+        inFlight.delete(target);
+        failed.set(target.id, true);
+        onFail(target.id, err);
+        reschedule(target, now() - t0);
+      });
+  }
+
+  function reschedule(target, elapsedMs) {
+    const ms = nextDelayMs(elapsedMs, intervalFor(!!failed.get(target.id), intervalMs, backoffMs));
+    handles.set(target, schedule(() => run(target), ms, target));
+  }
+
+  function start() {
+    running = true;
+    for (const t of targets.filter((t) => t.enabled)) run(t);
+  }
+
+  function stop() {
+    running = false;
+    for (const h of handles.values()) cancel(h);
+    handles.clear();
+  }
+
+  return {
+    start,
+    stop,
+    get running() { return running; },
+  };
+}
+
 // ---------- Node 测试钩子（固定尾部，勿动）----------
-if (typeof module !== 'undefined' && module.exports) module.exports = { parseLabels, parseProm, sumSeries, histogram, percentile, HISTS, buildSnapshot, computeRates, metricsUrlOf, makeTarget, loadTargets, saveTargets, classifyFailure };
+if (typeof module !== 'undefined' && module.exports) module.exports = { parseLabels, parseProm, sumSeries, histogram, percentile, HISTS, buildSnapshot, computeRates, metricsUrlOf, makeTarget, loadTargets, saveTargets, classifyFailure, nextDelayMs, intervalFor, createPoller };
 if (typeof document !== 'undefined' && typeof boot === 'function' && document.getElementById) boot();
 </script>
 </body>
