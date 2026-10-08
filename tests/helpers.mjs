@@ -20,3 +20,16 @@ export function test(name, fn) {
   else console.log('  ok -', name);
 }
 export const flush = () => new Promise((r) => setTimeout(r, 20));
+
+// 深度相等（跨 realm 安全：不比较原型链，vm 沙箱返回的对象也能通过）
+export function deepEqual(a, b) {
+  if (typeof a !== 'object' || a === null || typeof b !== 'object' || b === null)
+    return a === b || Object.is(a, b);
+  if (Array.isArray(a)) {
+    if (!Array.isArray(b) || a.length !== b.length) return false;
+    return a.every((v, i) => deepEqual(v, b[i]));
+  }
+  const ka = Object.keys(a), kb = Object.keys(b);
+  if (ka.length !== kb.length) return false;
+  return ka.every((k) => deepEqual(a[k], b[k]));
+}

@@ -75,8 +75,82 @@ function percentile(buckets, count, q) {
   return null;
 }
 
+// ---------- 快照构建 + 实时速率（从 server.mjs 移植）----------
+
+const HISTS = [
+  'time_to_first_token_seconds',
+  'inter_token_latency_seconds',
+  'e2e_request_latency_seconds',
+  'request_queue_time_seconds',
+  'request_prefill_time_seconds',
+  'request_decode_time_seconds',
+];
+
+function distinctLabel(samples, metric, key) {
+  const set = new Set();
+  for (const s of samples[metric] || []) if (s.labels[key] != null) set.add(s.labels[key]);
+  return [...set];
+}
+
+function buildSnapshot(samples) {
+  const g = {
+    running: sumSeries(samples, 'vllm:num_requests_running') ?? 0,
+    waiting: sumSeries(samples, 'vllm:num_requests_waiting') ?? 0,
+    kvPct: sumSeries(samples, 'vllm:kv_cache_usage_perc') ?? 0,
+    preemptions: sumSeries(samples, 'vllm:num_preemptions_total') ?? 0,
+    promptTokens: sumSeries(samples, 'vllm:prompt_tokens_total') ?? 0,
+    generationTokens: sumSeries(samples, 'vllm:generation_tokens_total') ?? 0,
+    cachedPromptTokens: sumSeries(samples, 'vllm:prompt_tokens_cached_total') ?? 0,
+    residentMb: (sumSeries(samples, 'process_resident_memory_bytes') ?? 0) / 1048576,
+  };
+  const successByReason = {};
+  let successTotal = 0;
+  for (const s of samples['vllm:request_success_total'] || []) {
+    const r = s.labels.finished_reason || 'unknown';
+    successByReason[r] = s.value;
+    successTotal += s.value;
+  }
+  const hist = {};
+  for (const name of HISTS) {
+    const h = histogram(samples, 'vllm:' + name);
+    hist[name] = {
+      count: h.count,
+      avg: h.avg,
+      p50: percentile(h.buckets, h.count, 0.5),
+      p99: percentile(h.buckets, h.count, 0.99),
+    };
+  }
+  const drafts = sumSeries(samples, 'vllm:spec_decode_num_draft_tokens_total');
+  const accepted = sumSeries(samples, 'vllm:spec_decode_num_accepted_tokens_total');
+  return {
+    model: distinctLabel(samples, 'vllm:num_requests_running', 'model_name')[0] ?? null,
+    engines: distinctLabel(samples, 'vllm:num_requests_running', 'engine'),
+    gauges: g,
+    successByReason,
+    successTotal,
+    specDecode: drafts ? { drafts, accepted: accepted ?? 0, acceptRate: (accepted ?? 0) / drafts } : null,
+    hist,
+  };
+}
+
+// 实时速率：相邻两次抓取的差值（delta / 间隔秒数），无滑动窗口；计数器不动时精确为 0
+function computeRates(history) {
+  if (!Array.isArray(history) || history.length < 2) return null;
+  const prev = history[history.length - 2];
+  const cur = history[history.length - 1];
+  if (cur.ts === prev.ts) return null;
+  const dt = (cur.ts - prev.ts) / 1000;
+  const r = (a, b) => (a == null || b == null || a < b) ? null : (a - b) / dt; // a<b = 计数器重置
+  return {
+    promptTokensPerS: r(cur.c.prompt, prev.c.prompt),
+    generationTokensPerS: r(cur.c.generation, prev.c.generation),
+    requestsPerS: r(cur.c.success, prev.c.success),
+    preemptionsPerS: r(cur.c.preemptions, prev.c.preemptions),
+  };
+}
+
 // ---------- Node 测试钩子（固定尾部，勿动）----------
-if (typeof module !== 'undefined' && module.exports) module.exports = { parseLabels, parseProm, sumSeries, histogram, percentile };
+if (typeof module !== 'undefined' && module.exports) module.exports = { parseLabels, parseProm, sumSeries, histogram, percentile, HISTS, buildSnapshot, computeRates };
 if (typeof document !== 'undefined' && typeof boot === 'function' && document.getElementById) boot();
 </script>
 </body>
