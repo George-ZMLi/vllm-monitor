@@ -1,0 +1,11 @@
+{
+  "targets": [
+    {
+      "id": "example",
+      "name": "example",
+      "baseURL": "https://your-vllm.example.com/v1",
+      "apiKey": ""
+    }
+  ],
+  "scrapeMs": 500
+}

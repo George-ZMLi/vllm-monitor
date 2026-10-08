@@ -1,0 +1,961 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>vLLM 监控（单文件版）</title>
+<!--
+  纯浏览器版 vLLM 监控面板：无后端服务，双击打开即用。
+  · 数据直接由浏览器抓取 {baseURL 域名}/metrics
+  · 端点允许跨域（CORS）时直连；不允许时自动经公共 CORS 代理（allorigins），也可填自定义代理模板
+  · 带 API Key 的端点无法经公共代理（密钥不能过第三方），只能直连或改用 Node 服务版
+  · 配置（实例/间隔/代理模式）存于 localStorage，历史数据仅存内存
+-->
+<style>
+  :root {
+    --bg: #f2f5fa;
+    --panel: #ffffff;
+    --border: #dde5f1;
+    --text: #22364f;
+    --dim: #8195b0;
+    --accent: #4d7fd6;
+    --accent-soft: #e8f0fc;
+    --ok: #2f9e77;
+    --warn: #d79a35;
+    --err: #d65866;
+    --shadow: 0 1px 2px rgba(34, 54, 79, .04), 0 6px 20px rgba(34, 54, 79, .06);
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html, body { margin: 0; }
+  body {
+    background: linear-gradient(180deg, #e8f0fa 0%, var(--bg) 280px) fixed;
+    color: var(--text);
+    font: 14px/1.5 -apple-system, "SF Pro Text", "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  header {
+    display: flex; align-items: center; gap: 18px;
+    padding: 12px 22px;
+    background: rgba(255, 255, 255, .82);
+    backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--border);
+    position: sticky; top: 0; z-index: 10;
+    user-select: none; -webkit-user-select: none;
+  }
+  .title {
+    font-size: 15px; font-weight: 700; letter-spacing: .02em;
+    display: flex; align-items: center; gap: 9px; white-space: nowrap;
+  }
+  .title .logo {
+    width: 24px; height: 24px; border-radius: 7px; flex: none;
+    background: linear-gradient(135deg, #4d7fd6, #7ba3e8);
+    color: #fff; font-size: 13px; font-weight: 800;
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 2px 6px rgba(77, 127, 214, .35);
+  }
+  .meta {
+    display: flex; align-items: center; gap: 8px; flex: none;
+    color: var(--dim); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap;
+  }
+  .meta select {
+    appearance: none; -webkit-appearance: none;
+    border: 1px solid var(--border); background: var(--panel); color: var(--text);
+    border-radius: 999px; padding: 4px 12px;
+    font: 500 12px/1.4 inherit; cursor: pointer;
+    transition: border-color .15s;
+  }
+  .meta select:hover { border-color: var(--accent); }
+  #intervalState { font-weight: 600; color: var(--dim); }
+  #intervalState.fast { color: var(--ok); }
+  .dot {
+    width: 8px; height: 8px; border-radius: 50%; flex: none;
+    background: var(--ok); box-shadow: 0 0 0 3px rgba(47, 158, 119, .15);
+    transition: background .2s, box-shadow .2s;
+  }
+  .dot.down { background: var(--err); box-shadow: 0 0 0 3px rgba(214, 88, 102, .18); }
+  .instances { display: flex; align-items: center; gap: 7px; flex: 1; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+  .instances::-webkit-scrollbar { display: none; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 7px; flex: none;
+    border: 1px solid var(--border); background: var(--panel); color: var(--dim);
+    border-radius: 999px; padding: 5px 7px 5px 12px;
+    font: 500 12.5px/1.4 inherit; cursor: pointer;
+    transition: border-color .15s, background .15s, color .15s;
+    font-family: inherit;
+  }
+  .pill:hover { border-color: var(--accent); color: var(--text); }
+  .pill .st { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); flex: none; transition: background .2s; }
+  .pill .st.down { background: var(--err); }
+  .pill .x {
+    width: 16px; height: 16px; border-radius: 50%; line-height: 15px; text-align: center;
+    font-size: 13px; color: var(--dim); opacity: 0; transition: opacity .15s, background .15s;
+  }
+  .pill:hover .x { opacity: .55; }
+  .pill .x:hover { opacity: 1; background: rgba(34, 54, 79, .08); }
+  .pill.active {
+    background: var(--accent); border-color: var(--accent); color: #fff;
+    box-shadow: 0 2px 10px rgba(77, 127, 214, .35);
+  }
+  .pill.active .st { background: #fff; }
+  .pill.active .st.down { background: var(--err); }
+  .pill.active .x { color: #fff; }
+  .pill.add { border-style: dashed; background: transparent; padding: 5px 13px; }
+  .pill.add:hover { color: var(--accent); border-color: var(--accent); }
+  .banner {
+    margin: 14px auto 0; width: fit-content; max-width: calc(100% - 44px);
+    padding: 9px 14px; border: 1px solid #f3c8ce; background: #fdeeef; color: #a3323f;
+    border-radius: 10px; font-size: 13px;
+  }
+  .banner.warn { border-color: #f2ddb4; background: #fdf6e9; color: #8a6420; }
+  main { padding: 16px 22px 8px; display: flex; flex-direction: column; gap: 14px; max-width: 1280px; margin: 0 auto; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; }
+  .card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+    padding: 13px 15px; box-shadow: var(--shadow); transition: opacity .25s;
+  }
+  .card label {
+    display: block; font-size: 10.5px; font-weight: 600; letter-spacing: .07em;
+    text-transform: uppercase; color: var(--dim); margin-bottom: 6px;
+  }
+  .card .val { font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.15; white-space: nowrap; }
+  .card .val small { font-size: 12px; color: var(--dim); font-weight: 500; margin-left: 3px; }
+  .card .sub { color: var(--dim); font-size: 11px; margin-top: 4px; min-height: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .card.kv-hot .val { color: var(--err); }
+  .card.kv-warm .val { color: var(--warn); }
+  .card .val.tick { animation: valpulse .5s ease; }
+  @keyframes valpulse { 0% { color: var(--accent); } }
+  body.stale .card { opacity: .45; }
+  .charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 10px; }
+  .panel {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+    padding: 14px; box-shadow: var(--shadow);
+  }
+  .phead { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 4px; }
+  .phead h3 { margin: 0; font-size: 13px; font-weight: 650; }
+  .legend { font-size: 11px; color: var(--dim); display: flex; gap: 12px; flex-wrap: wrap; font-variant-numeric: tabular-nums; }
+  .legend b { color: var(--text); font-weight: 650; }
+  .legend .sw { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 4px; }
+  canvas { width: 100%; height: 220px; display: block; }
+  footer { color: var(--dim); font-size: 11px; padding: 12px 22px 30px; text-align: center; }
+  @media (max-width: 640px) { .meta { display: none; } }
+  .mask {
+    position: fixed; inset: 0; z-index: 50;
+    background: rgba(34, 54, 79, .32); backdrop-filter: blur(3px);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .modal {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+    padding: 22px 24px; width: 380px; max-width: calc(100vw - 40px); max-height: calc(100vh - 40px); overflow-y: auto;
+    box-shadow: 0 18px 50px rgba(34, 54, 79, .22);
+  }
+  .modal h3 { margin: 0 0 16px; font-size: 15px; font-weight: 700; }
+  .modal label {
+    display: block; font-size: 11px; font-weight: 600; letter-spacing: .05em;
+    text-transform: uppercase; color: var(--dim); margin-bottom: 12px;
+  }
+  .modal input, .modal select {
+    display: block; width: 100%; margin-top: 5px; padding: 8px 11px;
+    border: 1px solid var(--border); border-radius: 8px;
+    font: 13px/1.4 inherit; color: var(--text); background: #fafcff;
+    transition: border-color .15s, box-shadow .15s;
+  }
+  .modal select { appearance: none; -webkit-appearance: none; cursor: pointer; }
+  .modal input:focus, .modal select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(77, 127, 214, .14); }
+  .hint { font-size: 11.5px; color: var(--dim); margin: 2px 0 16px; }
+  .mrow { display: flex; justify-content: flex-end; gap: 8px; }
+  .btn { border-radius: 8px; padding: 8px 18px; font-size: 13px; cursor: pointer; transition: .15s; font-family: inherit; }
+  .btn.primary { background: var(--accent); border: 1px solid var(--accent); color: #fff; }
+  .btn.primary:hover { background: #3f6fc4; }
+  .btn.ghost { background: transparent; border: 1px solid var(--border); color: var(--dim); }
+  .btn.ghost:hover { color: var(--text); border-color: var(--dim); }
+  .merr { margin-top: 12px; font-size: 12px; color: var(--err); }
+  .mres { margin-top: 12px; font-size: 12px; }
+  .mres.busy { color: var(--dim); }
+  .mres.ok { color: var(--ok); }
+  .mres.err { color: var(--err); }
+</style>
+</head>
+<body>
+<header>
+  <div class="title"><span class="logo">V</span>vLLM 监控</div>
+  <div class="instances" id="tabs"></div>
+  <div class="meta">
+    <select id="interval" title="刷新间隔（自动：有流量 0.5s，空闲 2s）" aria-label="刷新间隔">
+      <option value="auto">自动（活跃 0.5s / 空闲 2s）</option>
+      <option value="500">0.5s</option>
+      <option value="1000">1s</option>
+      <option value="2000">2s</option>
+    </select>
+    <span id="intervalState" hidden></span>
+    <span class="dot" id="dot"></span><span id="updated">等待数据…</span>
+  </div>
+</header>
+<div class="banner" id="banner" hidden></div>
+<main>
+  <section class="cards">
+    <div class="card"><label>正在运行</label><div class="val" id="v-run">–</div><div class="sub">running requests</div></div>
+    <div class="card"><label>排队等待</label><div class="val" id="v-wait">–</div><div class="sub">waiting requests</div></div>
+    <div class="card" id="card-kv"><label>KV 缓存</label><div class="val" id="v-kv">–<small>%</small></div><div class="sub">kv_cache_usage</div></div>
+    <div class="card"><label>生成速度</label><div class="val" id="v-gen">–<small>tok/s</small></div><div class="sub">实时 · generation</div></div>
+    <div class="card"><label>预填充速度</label><div class="val" id="v-prompt">–<small>tok/s</small></div><div class="sub">实时 · prompt</div></div>
+    <div class="card"><label>TTFT p50</label><div class="val" id="v-ttft">–</div><div class="sub">首 token 延迟（累计）</div></div>
+    <div class="card"><label>E2E p99</label><div class="val" id="v-e2e">–</div><div class="sub">端到端延迟（累计）</div></div>
+    <div class="card"><label>成功请求</label><div class="val" id="v-succ">–</div><div class="sub" id="s-succ">finished requests</div></div>
+    <div class="card"><label>抢占次数</label><div class="val" id="v-preem">–</div><div class="sub">preemptions</div></div>
+    <div class="card"><label>内存</label><div class="val" id="v-mem">–<small>MB</small></div><div class="sub">resident</div></div>
+    <div class="card"><label>模型</label><div class="val" id="v-model">–</div><div class="sub" id="s-engines"></div></div>
+    <div class="card" id="card-spec" hidden><label>投机解码接受率</label><div class="val" id="v-spec">–</div><div class="sub">accepted / draft tokens</div></div>
+  </section>
+  <section class="charts">
+    <div class="panel"><div class="phead"><h3>请求数量</h3><div class="legend" id="lg1"></div></div><canvas id="c1"></canvas></div>
+    <div class="panel"><div class="phead"><h3>KV 缓存使用率</h3><div class="legend" id="lg2"></div></div><canvas id="c2"></canvas></div>
+    <div class="panel"><div class="phead"><h3>Token 吞吐</h3><div class="legend" id="lg3"></div></div><canvas id="c3"></canvas></div>
+    <div class="panel"><div class="phead"><h3>延迟</h3><div class="legend" id="lg4"></div></div><canvas id="c4"></canvas></div>
+  </section>
+</main>
+<footer id="foot"></footer>
+
+<div class="mask" id="modal" hidden>
+  <div class="modal">
+    <h3>添加监控实例</h3>
+    <label>名称<input id="f-name" placeholder="如 gagag（留空则取域名）" autocomplete="off"></label>
+    <label>Base URL<input id="f-base" placeholder="https://your-vllm.example.com/v1" autocomplete="off" spellcheck="false"></label>
+    <label>API Key（可选）<input id="f-key" type="password" placeholder="sk-…（仅直连时生效，不会经公共代理）" autocomplete="off"></label>
+    <label>CORS 代理（全局设置）
+      <select id="f-proxy">
+        <option value="auto">自动（先直连，失败走公共代理；带 Key 时仅直连）</option>
+        <option value="direct">仅直连（端点必须允许跨域）</option>
+        <option value="custom">自定义代理模板</option>
+      </select>
+    </label>
+    <input id="f-proxyurl" placeholder="https://your-worker.example.workers.dev/{url}" hidden autocomplete="off" spellcheck="false">
+    <p class="hint" id="f-hint">metrics 端点将自动取为 baseURL 域名根下的 /metrics</p>
+    <div class="mrow">
+      <button class="btn ghost" id="f-cancel" type="button">取消</button>
+      <button class="btn ghost" id="f-test" type="button">测试</button>
+      <button class="btn primary" id="f-add" type="button">添加</button>
+    </div>
+    <p class="merr" id="f-err" hidden></p>
+    <p class="mres" id="f-res" hidden></p>
+  </div>
+</div>
+
+<script>
+(() => {
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+// ---------- 配置（localStorage） ----------
+const INTERVALS = [500, 1000, 2000];
+const MAX = 2400; // 每实例保留的采样点数
+// 刷新间隔：'auto'（默认，有流量 0.5s / 空闲 2s）或固定 '500' / '1000' / '2000'
+const savedInterval = localStorage.getItem('vllm-p.interval');
+let intervalMode = (savedInterval === 'auto' || INTERVALS.includes(Number(savedInterval))) ? savedInterval : 'auto';
+const AUTO_FAST = 500, AUTO_SLOW = 2000;
+let curInterval = intervalMode === 'auto' ? AUTO_SLOW : Number(intervalMode); // 当前生效间隔
+let inactStreak = 1; // 连续空闲轮询次数；初始 1（未知按空闲处理：空闲实例保持 2s，首个活跃 tick 立即提速）
+const autoActive = (s) => !!(s && s.up && (
+  (s.rates && (s.rates.generationTokensPerS > 0 || s.rates.promptTokensPerS > 0 || s.rates.requestsPerS > 0)) ||
+  s.gauges.running > 0 || s.gauges.waiting > 0));
+const effectiveInterval = () => (intervalMode === 'auto' ? (inactStreak < 2 ? AUTO_FAST : AUTO_SLOW) : Number(intervalMode));
+
+function loadTargets() {
+  try {
+    const t = JSON.parse(localStorage.getItem('vllm-p.targets') || 'null');
+    if (Array.isArray(t) && t.length) return t;
+  } catch {}
+  return []; // 无默认实例：请通过界面添加自己的 vLLM 端点
+}
+let targets = loadTargets();
+for (const t of targets) t.metricsUrl = new URL(t.baseURL).origin + '/metrics';
+let activeId = localStorage.getItem('vllm-p.active');
+if (!targets.some((t) => t.id === activeId)) activeId = targets[0]?.id ?? null;
+let proxyMode = localStorage.getItem('vllm-p.proxyMode') || 'auto'; // auto | direct | custom
+let proxyCustom = localStorage.getItem('vllm-p.proxyCustom') || '';
+
+const PROXIES = {
+  allorigins: { label: 'allorigins', make: (u) => 'https://api.allorigins.win/raw?url=' + encodeURIComponent(u) },
+};
+const viaName = (v) => v === 'direct' ? '直连' : (PROXIES[v] ? PROXIES[v].label + ' 代理' : v);
+
+function persist() {
+  localStorage.setItem('vllm-p.targets', JSON.stringify(targets.map(({ id, name, baseURL, apiKey }) => ({ id, name, baseURL, apiKey }))));
+  if (activeId) localStorage.setItem('vllm-p.active', activeId);
+  localStorage.setItem('vllm-p.interval', intervalMode);
+  localStorage.setItem('vllm-p.proxyMode', proxyMode);
+  localStorage.setItem('vllm-p.proxyCustom', proxyCustom);
+}
+
+// ---------- Prometheus 文本解析 ----------
+function parseLabels(s) {
+  const out = {};
+  const re = /([a-zA-Z_][a-zA-Z0-9_]*)="((?:[^"\\]|\\.)*)"/g;
+  let m;
+  while ((m = re.exec(s))) out[m[1]] = m[2].replace(/\\(.)/g, '$1');
+  return out;
+}
+function parseProm(text) {
+  const samples = {};
+  for (const line of text.split('\n')) {
+    if (!line || line[0] === '#') continue;
+    const m = line.match(/^([a-zA-Z_:][a-zA-Z0-9_:]*)(?:\{(.*)\})?\s+(.+)$/);
+    if (!m) continue;
+    const [, name, labelStr, valStr] = m;
+    const value = Number(valStr);
+    if (Number.isNaN(value)) continue;
+    const labels = labelStr ? parseLabels(labelStr) : {};
+    (samples[name] ??= []).push({ labels, value });
+  }
+  return samples;
+}
+function sumSeries(samples, name) {
+  const arr = samples[name];
+  if (!arr || !arr.length) return null;
+  let t = 0;
+  let any = false;
+  for (const s of arr) if (isFinite(s.value)) { t += s.value; any = true; }
+  return any ? t : null;
+}
+function histogram(samples, base) {
+  const byLe = new Map();
+  for (const s of samples[base + '_bucket'] || []) {
+    const leRaw = s.labels.le;
+    if (leRaw == null || !isFinite(s.value)) continue;
+    const le = leRaw === '+Inf' ? Infinity : Number(leRaw);
+    if (!Number.isFinite(le) && le !== Infinity) continue;
+    byLe.set(le, (byLe.get(le) || 0) + s.value);
+  }
+  const buckets = [...byLe.entries()].sort((a, b) => a[0] - b[0]);
+  const count = sumSeries(samples, base + '_count') ?? 0;
+  const sum = sumSeries(samples, base + '_sum') ?? 0;
+  return { buckets, count, sum, avg: count ? sum / count : null };
+}
+function percentile(buckets, count, q) {
+  if (!count || count <= 0) return null;
+  const target = q * count;
+  let prevLe = 0;
+  let prevCount = 0;
+  for (const [le, c] of buckets) {
+    if (c >= target) {
+      if (le === Infinity) return null;
+      const frac = (target - prevCount) / (c - prevCount || 1);
+      return prevLe + (le - prevLe) * Math.min(Math.max(frac, 0), 1);
+    }
+    prevLe = le;
+    prevCount = c;
+  }
+  return null;
+}
+function distinctLabel(samples, metric, key) {
+  const set = new Set();
+  for (const s of samples[metric] || []) if (s.labels[key] != null) set.add(s.labels[key]);
+  return [...set];
+}
+const HISTS = [
+  'time_to_first_token_seconds',
+  'e2e_request_latency_seconds',
+];
+function buildSnapshot(samples) {
+  const g = {
+    running: sumSeries(samples, 'vllm:num_requests_running') ?? 0,
+    waiting: sumSeries(samples, 'vllm:num_requests_waiting') ?? 0,
+    kvPct: sumSeries(samples, 'vllm:kv_cache_usage_perc') ?? 0,
+    preemptions: sumSeries(samples, 'vllm:num_preemptions_total') ?? 0,
+    promptTokens: sumSeries(samples, 'vllm:prompt_tokens_total') ?? 0,
+    generationTokens: sumSeries(samples, 'vllm:generation_tokens_total') ?? 0,
+    cachedPromptTokens: sumSeries(samples, 'vllm:prompt_tokens_cached_total') ?? 0,
+    residentMb: (sumSeries(samples, 'process_resident_memory_bytes') ?? 0) / 1048576,
+  };
+  const successByReason = {};
+  let successTotal = 0;
+  for (const s of samples['vllm:request_success_total'] || []) {
+    const r = s.labels.finished_reason || 'unknown';
+    successByReason[r] = s.value;
+    successTotal += s.value;
+  }
+  const hist = {};
+  for (const name of HISTS) {
+    const h = histogram(samples, 'vllm:' + name);
+    hist[name] = { count: h.count, avg: h.avg, p50: percentile(h.buckets, h.count, 0.5), p99: percentile(h.buckets, h.count, 0.99) };
+  }
+  const drafts = sumSeries(samples, 'vllm:spec_decode_num_draft_tokens_total');
+  const accepted = sumSeries(samples, 'vllm:spec_decode_num_accepted_tokens_total');
+  return {
+    model: distinctLabel(samples, 'vllm:num_requests_running', 'model_name')[0] ?? null,
+    engines: distinctLabel(samples, 'vllm:num_requests_running', 'engine'),
+    gauges: g,
+    successByReason,
+    successTotal,
+    specDecode: drafts ? { drafts, accepted: accepted ?? 0, acceptRate: (accepted ?? 0) / drafts } : null,
+    hist,
+  };
+}
+
+// ---------- 抓取（直连 / 公共代理 / 自定义模板） ----------
+function modeOrder(t) {
+  let order;
+  if (proxyMode === 'direct') order = ['direct'];
+  else if (proxyMode === 'custom') order = proxyCustom ? ['custom'] : ['direct'];
+  else {
+    // auto：直连永远先试；公共代理仅当无 Key（Key 不能也不应经过第三方）
+    order = t.apiKey ? ['direct'] : ['direct', 'allorigins'];
+  }
+  if (t.id !== '__test') {
+    const remembered = localStorage.getItem('vllm-p.via.' + t.id);
+    if (remembered && order.includes(remembered)) order = [remembered, ...order.filter((m) => m !== remembered)];
+  }
+  return order;
+}
+async function fetchMetrics(t) {
+  const url = t.metricsUrl;
+  const errs = [];
+  for (const mode of modeOrder(t)) {
+    const isDirect = mode === 'direct';
+    const u = isDirect ? url : (mode === 'custom' ? proxyCustom.replace('{url}', encodeURIComponent(url)) : PROXIES[mode].make(url));
+    const headers = isDirect && t.apiKey ? { authorization: 'Bearer ' + t.apiKey } : {};
+    try {
+      const res = await fetch(u, { headers, cache: 'no-store', signal: AbortSignal.timeout(15000) });
+      if (!res.ok) { errs.push((isDirect ? '直连' : PROXIES[mode].label + ' 代理') + ' HTTP ' + res.status); continue; }
+      const text = await res.text();
+      if (t.id !== '__test') localStorage.setItem('vllm-p.via.' + t.id, mode);
+      return { ok: true, text, via: isDirect ? 'direct' : mode };
+    } catch (e) {
+      errs.push((isDirect ? '直连' : PROXIES[mode].label + ' 代理') + (e.name === 'TimeoutError' ? ' 超时' : ' 失败'));
+    }
+  }
+  if (t.apiKey) errs.push('该实例配置了 API Key：公共代理无法携带 Key（密钥也不应过第三方），请改用"仅直连"（端点需允许跨域）或 Node 服务版');
+  return { ok: false, error: errs.join('；') };
+}
+
+// ---------- 每实例状态 ----------
+const store = new Map();
+const getStore = (id) => {
+  if (!store.has(id)) store.set(id, { running: [], waiting: [], kv: [], gen: [], prompt: [], ttftP50: [], e2eP99: [], ts: [], last: null, snap: null, via: null });
+  return store.get(id);
+};
+const push = (arr, v) => { arr.push(v); if (arr.length > MAX) arr.shift(); };
+const dotEls = new Map();
+
+async function pollTarget(t) {
+  const out = await fetchMetrics(t);
+  const st = getStore(t.id);
+  if (!out.ok) { st.snap = { up: false, error: out.error, ts: Date.now() }; return; }
+  const samples = parseProm(out.text);
+  const base = buildSnapshot(samples);
+  const now = Date.now();
+  const cur = {
+    prompt: base.gauges.promptTokens,
+    generation: base.gauges.generationTokens,
+    success: base.successTotal,
+    preemptions: base.gauges.preemptions,
+  };
+  // 实时速率：与上一次抓取的差值（delta / 间隔秒数），无滑动窗口
+  const prev = st.last;
+  st.last = { ts: now, c: cur };
+  let rates = null;
+  if (prev && now > prev.ts) {
+    const dt = (now - prev.ts) / 1000;
+    const r = (a, b) => (a == null || b == null || a < b) ? null : (a - b) / dt; // a<b = 计数器重置
+    rates = {
+      promptTokensPerS: r(cur.prompt, prev.c.prompt),
+      generationTokensPerS: r(cur.generation, prev.c.generation),
+      requestsPerS: r(cur.success, prev.c.success),
+      preemptionsPerS: r(cur.preemptions, prev.c.preemptions),
+    };
+  }
+  st.snap = {
+    up: true, error: null, ts: now, metricsUrl: t.metricsUrl, via: out.via,
+    hasVllm: Object.keys(samples).some((k) => k.startsWith('vllm:')),
+    rates, ...base,
+  };
+  st.via = out.via;
+}
+
+// ---------- 格式化 ----------
+function fmtN(v) {
+  if (v == null || !isFinite(v)) return '–';
+  const a = Math.abs(v);
+  if (a >= 1e6) return (v / 1e6).toFixed(1) + 'M';
+  if (a >= 1e4) return (v / 1e3).toFixed(1) + 'k';
+  if (a >= 100) return String(Math.round(v));
+  if (a >= 10) return v.toFixed(1);
+  return v.toFixed(2);
+}
+function fmtS(v) {
+  if (v == null || !isFinite(v)) return '–';
+  if (v < 1) return Math.round(v * 1000) + ' ms';
+  return v.toFixed(2) + ' s';
+}
+function shortVal(v) {
+  if (v >= 1e4) return Math.round(v / 1e3) + 'k';
+  if (v >= 100) return String(Math.round(v));
+  if (v >= 1) return v.toFixed(1);
+  return v.toFixed(2);
+}
+function setNum(id, text) {
+  const el = $(id);
+  if (el.firstChild && el.firstChild.nodeType === 3) el.firstChild.nodeValue = text;
+  else el.textContent = text;
+}
+const activeName = () => (targets.find((t) => t.id === activeId) || {}).name || '';
+
+// ---------- 卡片数值过渡动画（350ms easeOutCubic，数值跳变时附带轻微高亮闪烁） ----------
+const NUMCARDS = {
+  'v-run': { fmt: (v) => fmtN(v) },
+  'v-wait': { fmt: (v) => fmtN(v) },
+  'v-kv': { fmt: (v) => v.toFixed(1) },
+  'v-gen': { fmt: (v) => fmtN(v) },
+  'v-prompt': { fmt: (v) => fmtN(v) },
+  'v-ttft': { fmt: (v) => fmtS(v) },
+  'v-e2e': { fmt: (v) => fmtS(v) },
+  'v-succ': { fmt: (v) => fmtN(v) },
+  'v-preem': { fmt: (v) => fmtN(v) },
+  'v-mem': { fmt: (v) => String(Math.round(v)) },
+  'v-spec': { fmt: (v) => (v * 100).toFixed(1) + '%' },
+};
+const shown = new Map(); // 各卡片当前显示值（作为下次动画起点）
+const anims = new Map(); // 卡片 id → { from, to, t0 }
+let animRaf = null;
+function animLoop(now) {
+  let alive = false;
+  for (const [id, a] of anims) {
+    const p = Math.min(1, (now - a.t0) / 350);
+    const v = a.from + (a.to - a.from) * (1 - Math.pow(1 - p, 3));
+    shown.set(id, v);
+    setNum(id, NUMCARDS[id].fmt(v));
+    if (p < 1) alive = true;
+    else anims.delete(id);
+  }
+  animRaf = alive ? requestAnimationFrame(animLoop) : null;
+}
+function animTo(id, target) {
+  const cfg = NUMCARDS[id];
+  if (!cfg) return;
+  if (target == null || !isFinite(target)) {
+    anims.delete(id);
+    shown.set(id, null);
+    setNum(id, '–');
+    return;
+  }
+  const prevShown = shown.has(id) ? shown.get(id) : null;
+  const prevTarget = anims.has(id) ? anims.get(id).to : prevShown;
+  if (prevTarget != null && Math.abs(target - prevTarget) < 1e-6) return; // 值未变化，不重启动画
+  const big = prevTarget == null || Math.abs(target - prevTarget) > Math.max(0.1 * Math.max(Math.abs(target), Math.abs(prevTarget)), 1);
+  if (big) {
+    const el = $(id);
+    el.classList.remove('tick'); void el.offsetWidth; el.classList.add('tick');
+  }
+  anims.set(id, { from: (prevShown == null || !isFinite(prevShown)) ? target : prevShown, to: target, t0: performance.now() });
+  if (!animRaf) animRaf = requestAnimationFrame(animLoop);
+}
+function resetCardAnims() {
+  shown.clear();
+  anims.clear();
+  if (animRaf) { cancelAnimationFrame(animRaf); animRaf = null; }
+  for (const id of Object.keys(NUMCARDS)) setNum(id, '–');
+}
+
+// ---------- 图表 ----------
+const CHARTS = [
+  { cv: 'c1', lg: 'lg1', unit: '', fixed: false, series: [
+    { label: 'running', color: '#4d7fd6', key: 'running', fmt: fmtN },
+    { label: 'waiting', color: '#e09b3f', key: 'waiting', fmt: fmtN } ] },
+  { cv: 'c2', lg: 'lg2', unit: '%', fixed: 100, series: [
+    { label: 'kv_cache', color: '#8a76d9', key: 'kv', fmt: (v) => v == null ? '–' : v.toFixed(1) } ] },
+  { cv: 'c3', lg: 'lg3', unit: 'tok/s', fixed: false, series: [
+    { label: 'generation', color: '#2f9e77', key: 'gen', fmt: fmtN, axis: 'right' },
+    { label: 'prompt', color: '#59a8dc', key: 'prompt', fmt: fmtN, axis: 'left', skipZero: true } ] },
+  { cv: 'c4', lg: 'lg4', unit: 's', fixed: false, series: [
+    { label: 'TTFT p50', color: '#d6709a', key: 'ttftP50', fmt: fmtS, axis: 'right' },
+    { label: 'E2E p99', color: '#7c6fd0', key: 'e2eP99', fmt: fmtS, axis: 'left' } ] },
+];
+// 单调三次 Hermite（Fritsch–Carlson）平滑：把离散采样点连成平滑曲线，无过冲，适合 prefill 这类尖峰数据
+function drawSmooth(ctx, p) {
+  const n = p.length;
+  if (n < 2) return;
+  const xs = p.map((q) => q[0]), ys = p.map((q) => q[1]);
+  const dx = [], sl = [];
+  for (let i = 0; i < n - 1; i++) {
+    dx[i] = Math.max(xs[i + 1] - xs[i], 1e-6);
+    sl[i] = (ys[i + 1] - ys[i]) / dx[i];
+  }
+  const m = new Array(n);
+  m[0] = sl[0];
+  m[n - 1] = sl[n - 2];
+  for (let i = 1; i < n - 1; i++) m[i] = sl[i - 1] * sl[i] <= 0 ? 0 : (sl[i - 1] + sl[i]) / 2;
+  for (let i = 0; i < n - 1; i++) {
+    if (sl[i] === 0) { m[i] = 0; m[i + 1] = 0; continue; }
+    const a = m[i] / sl[i], b = m[i + 1] / sl[i];
+    const h = Math.hypot(a, b);
+    if (h > 3) { const t = 3 / h; m[i] = t * a * sl[i]; m[i + 1] = t * b * sl[i]; }
+  }
+  ctx.beginPath();
+  ctx.moveTo(xs[0], ys[0]);
+  for (let i = 0; i < n - 1; i++) {
+    const h = dx[i];
+    ctx.bezierCurveTo(xs[i] + h / 3, ys[i] + m[i] * h / 3, xs[i + 1] - h / 3, ys[i + 1] - m[i + 1] * h / 3, xs[i + 1], ys[i + 1]);
+  }
+  ctx.stroke();
+}
+function fmtSpan(ms) {
+  const m = Math.floor(ms / 60000), s = Math.floor((ms % 60000) / 1000);
+  return m > 0 ? m + 'm' + (s ? ' ' + s + 's' : '') : s + 's';
+}
+// min-max 降采样：点超出预算时，每个桶取最大/最小值所在的下标参与绘制，
+// 单样本尖峰（某一拍 gen 突高）不会像等步长抽点那样被吞掉；-1 表示全 null 的桶（用于断线）
+function decimIdx(vals, n, maxPts) {
+  if (n <= maxPts) { const all = new Array(n); for (let i = 0; i < n; i++) all[i] = i; return all; }
+  const buckets = Math.max(2, Math.floor(maxPts / 2));
+  const bsize = Math.ceil(n / buckets);
+  const out = [];
+  for (let b = 0; b < buckets; b++) {
+    const lo = b * bsize, hi = Math.min(n, lo + bsize);
+    if (lo >= n) break;
+    let mnI = -1, mxI = -1;
+    for (let i = lo; i < hi; i++) {
+      const v = vals[i];
+      if (v == null || !isFinite(v)) continue;
+      if (mnI < 0 || v < vals[mnI]) mnI = i;
+      if (mxI < 0 || v > vals[mxI]) mxI = i;
+    }
+    if (mnI < 0) { out.push(-1); continue; }
+    if (mnI === mxI) { out.push(mnI); continue; }
+    if (mnI < mxI) { out.push(mnI, mxI); } else { out.push(mxI, mnI); }
+  }
+  if (out[out.length - 1] !== n - 1) {
+    const lv = vals[n - 1];
+    if (lv != null && isFinite(lv)) out.push(n - 1);
+    else if (out[out.length - 1] !== -1) out.push(-1);
+  }
+  return out;
+}
+function draw(c) {
+  const st = getStore(activeId);
+  const series = c.series.map((s) => ({ ...s, data: st[s.key] }));
+  const cv = $(c.cv);
+  const ctx = cv.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+  const w = cv.clientWidth || 600, h = cv.clientHeight || 220;
+  if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) {
+    cv.width = Math.round(w * dpr);
+    cv.height = Math.round(h * dpr);
+  }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  const hasRight = series.some((s) => s.axis === 'right');
+  const padL = 46, padR = hasRight ? 46 : 10, padT = 10, padB = 24;
+  const pw = w - padL - padR, ph = h - padT - padB;
+  // 双轴独立动态量程：各轴天花板 = 该轴数据最大值 × 1.15，随数据自动伸缩（超出即抬高，尖峰滚出窗口即回落）
+  const axMax = { left: 0, right: 0 };
+  for (const s of series) for (const v of s.data) if (v != null && isFinite(v)) axMax[s.axis === 'right' ? 'right' : 'left'] = Math.max(axMax[s.axis === 'right' ? 'right' : 'left'], v);
+  const leftYMax = c.fixed || Math.max(axMax.left * 1.15, 0.5);
+  const rightYMax = hasRight ? Math.max(axMax.right * 1.15, 0.5) : 0;
+  const YL = (v) => padT + ph * (1 - Math.min(Math.max(v / leftYMax, 0), 1));
+  const YR = (v) => padT + ph * (1 - Math.min(Math.max(v / rightYMax, 0), 1));
+  const Y = (s, v) => (s.axis === 'right' ? YR(v) : YL(v));
+  ctx.font = '10px ui-monospace, SFMono-Regular, Menlo, monospace';
+  ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+  for (let i = 0; i <= 4; i++) {
+    const y = padT + ph * (i / 4);
+    ctx.strokeStyle = 'rgba(34, 54, 79, .08)';
+    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(w - padR, y); ctx.stroke();
+    ctx.fillStyle = 'rgba(129, 149, 176, .9)';
+    const val = leftYMax * (1 - i / 4);
+    ctx.fillText(c.unit === '%' ? Math.round(val) + '%' : shortVal(val), padL - 6, y);
+  }
+  if (hasRight) {
+    // 右轴刻度：用该轴系列的颜色着色，与左轴量程相互独立
+    const rSeries = series.find((s) => s.axis === 'right');
+    ctx.fillStyle = rSeries.color;
+    ctx.textAlign = 'left';
+    for (let i = 0; i <= 4; i++) {
+      const y = padT + ph * (i / 4);
+      const val = rightYMax * (1 - i / 4);
+      ctx.fillText(c.unit === '%' ? Math.round(val) + '%' : shortVal(val), w - padR + 6, y);
+    }
+  }
+  ctx.textBaseline = 'top';
+  ctx.fillStyle = 'rgba(129, 149, 176, .8)';
+  // 动态水平坐标：从首个采样点起，随数据积累时间跨度一直延长，攒满 MAX 点后转为滚动窗口
+  const n = st.ts.length;
+  const spanMs = n > 1 ? st.ts[n - 1] - st.ts[0] : 0;
+  ctx.textAlign = 'left';
+  ctx.fillText(spanMs > 0 ? '-' + fmtSpan(spanMs) : '', padL, h - padB + 8);
+  ctx.textAlign = 'right';
+  ctx.fillText('now', w - padR, h - padB + 8);
+  const X = (i) => padL + pw * (n <= 1 ? 1 : i / (n - 1));
+  const maxPts = Math.max(2, Math.floor(pw / 3));
+  for (const s of series) {
+    const vals = s.data;
+    const idx = decimIdx(vals, n, maxPts);
+    // null（抓取失败空窗）处断开，每段用单调曲线 + 离散圆点绘制
+    const segs = [];
+    let seg = [];
+    for (const i of idx) {
+      if (i < 0) { if (seg.length) { segs.push(seg); seg = []; } continue; }
+      const v = vals[i];
+      if (v == null || !isFinite(v)) { if (seg.length) { segs.push(seg); seg = []; } continue; }
+      if (s.skipZero && v === 0) continue; // 0 值不画点与线、但不断线：数据点之间直接折线连接
+      seg.push([X(i), Y(s, v)]);
+    }
+    if (seg.length) segs.push(seg);
+    ctx.strokeStyle = s.color;
+    ctx.lineWidth = 1.5;
+    ctx.lineJoin = 'round';
+    ctx.fillStyle = s.color;
+    const dotR = n > maxPts ? 1.5 : 2;
+    for (const pts of segs) {
+      drawSmooth(ctx, pts);
+      for (const [px, py] of pts) { ctx.beginPath(); ctx.arc(px, py, dotR, 0, 6.2832); ctx.fill(); }
+    }
+  }
+}
+function legend(c) {
+  const st = getStore(activeId);
+  const el = $(c.lg);
+  el.innerHTML = c.series.map((s) => {
+    const arr = st[s.key];
+    let last = null;
+    for (let i = arr.length - 1; i >= 0; i--) if (arr[i] != null && isFinite(arr[i])) { last = arr[i]; break; }
+    return `<span><i class="sw" style="background:${s.color}"></i>${s.label} <b>${s.fmt(last)}</b></span>`;
+  }).join('');
+}
+
+// ---------- 渲染 ----------
+function render(t) {
+  const st = getStore(t.id);
+  const s = st.snap;
+  if (!s) return;
+  if (s.up) {
+    push(st.running, s.gauges.running);
+    push(st.waiting, s.gauges.waiting);
+    push(st.kv, s.gauges.kvPct);
+    push(st.gen, s.rates?.generationTokensPerS ?? null);
+    push(st.prompt, s.rates?.promptTokensPerS ?? null);
+    push(st.ttftP50, s.hist['time_to_first_token_seconds']?.p50 ?? null);
+    push(st.e2eP99, s.hist['e2e_request_latency_seconds']?.p99 ?? null);
+    push(st.ts, s.ts);
+
+    const g = s.gauges;
+    animTo('v-run', g.running);
+    animTo('v-wait', g.waiting);
+    animTo('v-kv', g.kvPct);
+    $('card-kv').classList.toggle('kv-hot', g.kvPct >= 90);
+    $('card-kv').classList.toggle('kv-warm', g.kvPct >= 70 && g.kvPct < 90);
+    animTo('v-gen', s.rates?.generationTokensPerS ?? null);
+    animTo('v-prompt', s.rates?.promptTokensPerS ?? null);
+    animTo('v-ttft', s.hist['time_to_first_token_seconds']?.p50 ?? null);
+    animTo('v-e2e', s.hist['e2e_request_latency_seconds']?.p99 ?? null);
+    animTo('v-succ', s.successTotal);
+    $('s-succ').textContent =
+      Object.entries(s.successByReason || {}).filter(([, v]) => v > 0).map(([k, v]) => k + ' ' + v).join(' · ') || 'finished requests';
+    animTo('v-preem', g.preemptions);
+    animTo('v-mem', g.residentMb);
+    setNum('v-model', s.model || '–');
+    $('s-engines').textContent = s.engines?.length ? 'engines: ' + s.engines.length : 'engines: –';
+    if (s.specDecode) {
+      $('card-spec').hidden = false;
+      animTo('v-spec', s.specDecode.acceptRate);
+    }
+    document.body.classList.remove('stale');
+    $('dot').classList.remove('down');
+    if (s.hasVllm === false) {
+      $('banner').className = 'banner warn';
+      $('banner').hidden = false;
+      $('banner').textContent = `实例 "${activeName()}" 连接成功，但响应中没有 vllm:* 指标（该端点可能不是 vLLM 服务）`;
+    } else {
+      $('banner').hidden = true;
+    }
+    $('updated').textContent = '更新 ' + new Date(s.ts).toLocaleTimeString('zh-CN', { hour12: false });
+    $('foot').textContent =
+      `纯浏览器模式（无需服务） · 实例 ${esc(activeName())} · 抓取 ${s.metricsUrl} · 经 ${viaName(s.via)} · 每 ${curInterval / 1000}s${intervalMode === 'auto' ? '（自动：活跃 0.5s / 空闲 2s）' : ''} · 历史最多 ${MAX} 点（仅存内存）`;
+    CHARTS.forEach((c) => { draw(c); legend(c); });
+  } else {
+    for (const k of ['running', 'waiting', 'kv', 'gen', 'prompt', 'ttftP50', 'e2eP99']) push(st[k], null);
+    push(st.ts, s.ts);
+    for (const id of Object.keys(NUMCARDS)) animTo(id, null);
+    document.body.classList.add('stale');
+    $('dot').classList.add('down');
+    $('banner').className = 'banner';
+    $('banner').hidden = false;
+    $('banner').textContent = `实例 “${esc(activeName())}” 抓取失败：${esc(s.error)}`;
+  }
+}
+
+// ---------- 实例标签页 ----------
+function renderTabs() {
+  dotEls.clear();
+  const el = $('tabs');
+  el.innerHTML = '';
+  for (const t of targets) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'pill' + (t.id === activeId ? ' active' : '');
+    b.dataset.id = t.id;
+    b.title = t.metricsUrl + (t.apiKey ? '（带 API Key）' : '');
+    b.innerHTML = `<i class="st"></i><span>${esc(t.name)}</span><span class="x" title="删除实例">×</span>`;
+    b.addEventListener('click', (ev) => {
+      if (ev.target.classList.contains('x')) { ev.stopPropagation(); removeTarget(t); return; }
+      activeId = t.id;
+      localStorage.setItem('vllm-p.active', t.id);
+      document.querySelectorAll('.pill[data-id]').forEach((p) => p.classList.toggle('active', p.dataset.id === t.id));
+      resetCardAnims();
+      const st = getStore(t.id);
+      if (st.snap) render(t); else CHARTS.forEach(draw);
+    });
+    el.appendChild(b);
+    dotEls.set(t.id, b.querySelector('.st'));
+  }
+  const add = document.createElement('button');
+  add.type = 'button';
+  add.className = 'pill add';
+  add.textContent = '＋ 添加';
+  add.addEventListener('click', openModal);
+  el.appendChild(add);
+}
+async function removeTarget(t) {
+  if (!confirm(`删除实例 “${t.name}”？`)) return;
+  targets = targets.filter((x) => x.id !== t.id);
+  localStorage.removeItem('vllm-p.via.' + t.id);
+  store.delete(t.id);
+  persist();
+  if (activeId === t.id) {
+    activeId = targets[0]?.id ?? null;
+    if (activeId) localStorage.setItem('vllm-p.active', activeId);
+  }
+  renderTabs();
+  resetCardAnims();
+  const t2 = activeId ? targets.find((x) => x.id === activeId) : null;
+  if (t2 && getStore(t2.id).snap) render(t2);
+  else CHARTS.forEach(draw);
+}
+
+// ---------- 添加实例弹窗 ----------
+function openModal() {
+  $('f-err').hidden = true;
+  $('f-res').hidden = true;
+  $('f-proxy').value = proxyMode;
+  $('f-proxyurl').value = proxyCustom;
+  $('f-proxyurl').hidden = proxyMode !== 'custom';
+  $('modal').hidden = false;
+  $('f-name').focus();
+}
+function closeModal() { $('modal').hidden = true; }
+$('f-cancel').addEventListener('click', closeModal);
+$('modal').addEventListener('click', (e) => { if (e.target.id === 'modal') closeModal(); });
+$('f-proxy').addEventListener('change', () => {
+  proxyMode = $('f-proxy').value;
+  $('f-proxyurl').hidden = proxyMode !== 'custom';
+  persist();
+});
+$('f-proxyurl').addEventListener('change', () => { proxyCustom = $('f-proxyurl').value.trim(); persist(); });
+$('f-base').addEventListener('input', () => {
+  const v = $('f-base').value.trim();
+  try { $('f-hint').textContent = 'metrics 端点将自动取为：' + new URL(v).origin + '/metrics'; }
+  catch { $('f-hint').textContent = 'metrics 端点将自动取为 baseURL 域名根下的 /metrics'; }
+});
+$('f-test').addEventListener('click', async () => {
+  const baseURL = $('f-base').value.trim();
+  const apiKey = $('f-key').value.trim();
+  const res = $('f-res');
+  let parsed;
+  try { parsed = new URL(baseURL); }
+  catch { res.className = 'mres err'; res.hidden = false; res.textContent = 'Base URL 无效，无法测试'; return; }
+  res.hidden = false;
+  res.className = 'mres busy';
+  res.textContent = '正在测试 ' + parsed.origin + '/metrics …';
+  try {
+    proxyCustom = $('f-proxyurl').value.trim() || proxyCustom;
+    const probe = { id: '__test', name: 'test', apiKey, metricsUrl: parsed.origin + '/metrics' };
+    const out = await fetchMetrics(probe);
+    if (out.ok) {
+      const text = out.text;
+      const hasVllm = text.includes('vllm:');
+      res.className = 'mres ok';
+      res.textContent = `连接成功（经 ${viaName(out.via)}）` + (hasVllm ? '，含 vllm 指标' : '，但未发现 vllm:* 指标（可能不是 vLLM 服务）');
+    } else {
+      res.className = 'mres err';
+      res.textContent = '连接失败：' + out.error;
+    }
+  } catch (e) {
+    res.className = 'mres err';
+    res.textContent = '测试出错：' + (e.message || e);
+  }
+});
+$('f-add').addEventListener('click', () => {
+  const name = $('f-name').value.trim();
+  const baseURL = $('f-base').value.trim();
+  const apiKey = $('f-key').value.trim();
+  const err = $('f-err');
+  err.hidden = true;
+  let parsed;
+  try { parsed = new URL(baseURL); }
+  catch { err.textContent = '请输入有效的 Base URL（http/https）'; err.hidden = false; return; }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') { err.textContent = 'Base URL 需为 http/https'; err.hidden = false; return; }
+  const finalName = name || parsed.hostname;
+  let id = finalName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'instance';
+  while (targets.some((t) => t.id === id)) id += '-' + Math.random().toString(36).slice(2, 6);
+  targets.push({ id, name: finalName, baseURL: parsed.toString(), apiKey, metricsUrl: parsed.origin + '/metrics' });
+  persist();
+  $('f-name').value = '';
+  $('f-base').value = '';
+  $('f-key').value = '';
+  $('f-hint').textContent = 'metrics 端点将自动取为 baseURL 域名根下的 /metrics';
+  activeId = id;
+  localStorage.setItem('vllm-p.active', id);
+  renderTabs();
+  closeModal();
+});
+
+// ---------- 轮询 ----------
+async function tick() {
+  try {
+    await Promise.all(targets.map(pollTarget));
+  } catch {}
+  for (const t of targets) {
+    const dot = dotEls.get(t.id);
+    if (dot) dot.classList.toggle('down', !(getStore(t.id).snap && getStore(t.id).snap.up));
+  }
+  const active = targets.find((t) => t.id === activeId);
+  if (active) render(active);
+  // 自动间隔：有流量（速度>0 或有运行/排队请求）时 0.5s；连续 2 次空闲后降回 2s（防抖，且故障时降载）
+  if (intervalMode === 'auto') {
+    if (autoActive(active ? getStore(activeId).snap : null)) inactStreak = 0;
+    else inactStreak++;
+    const next = effectiveInterval();
+    if (next !== curInterval) { curInterval = next; updateIntervalBadge(); }
+  }
+  setTimeout(tick, curInterval);
+}
+
+const intervalSel = $('interval');
+intervalSel.value = intervalMode;
+intervalSel.addEventListener('change', () => {
+  intervalMode = intervalSel.value;
+  if (intervalMode === 'auto') inactStreak = autoActive(getStore(activeId)?.snap) ? 0 : 2;
+  curInterval = intervalMode === 'auto' ? effectiveInterval() : Number(intervalMode);
+  localStorage.setItem('vllm-p.interval', intervalMode);
+  updateIntervalBadge();
+});
+
+function updateIntervalBadge() {
+  const el = $('intervalState');
+  if (intervalMode === 'auto') {
+    el.hidden = false;
+    el.textContent = 'auto ' + curInterval / 1000 + 's';
+    el.classList.toggle('fast', curInterval === AUTO_FAST);
+  } else {
+    el.hidden = true;
+    el.classList.remove('fast');
+  }
+}
+
+window.addEventListener('resize', () => CHARTS.forEach(draw));
+
+renderTabs();
+updateIntervalBadge();
+tick();
+})();
+</script>
+</body>
+</html>
