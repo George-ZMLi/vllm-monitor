@@ -634,11 +634,11 @@ const CHARTS = [
   { cv: 'c2', lg: 'lg2', unit: '%', fixed: 100, series: [
     { label: 'kv_cache', color: '#8a76d9', key: 'kv', fmt: (v) => v == null ? '–' : v.toFixed(1) } ] },
   { cv: 'c3', lg: 'lg3', unit: 'tok/s', fixed: false, series: [
-    { label: 'generation', color: '#2f9e77', key: 'gen', fmt: fmtN },
-    { label: 'prompt', color: '#59a8dc', key: 'prompt', fmt: fmtN } ] },
+    { label: 'generation', color: '#2f9e77', key: 'gen', axis: 'right', fmt: fmtN },
+    { label: 'prompt', color: '#59a8dc', key: 'prompt', axis: 'left', skipZero: true, fmt: fmtN } ] },
   { cv: 'c4', lg: 'lg4', unit: 's', fixed: false, series: [
-    { label: 'TTFT p50', color: '#d6709a', key: 'ttftP50', fmt: fmtS },
-    { label: 'E2E p99', color: '#7c6fd0', key: 'e2eP99', fmt: fmtS } ] },
+    { label: 'TTFT p50', color: '#d6709a', key: 'ttftP50', axis: 'right', fmt: fmtS },
+    { label: 'E2E p99', color: '#7c6fd0', key: 'e2eP99', axis: 'left', fmt: fmtS } ] },
 ];
 
 // 折线图：仅在有新数据点到达时调用；canvas 按 min(DPR, 2) 缩放
@@ -657,15 +657,17 @@ function draw(c) {
   }
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, w, h);
-  const padL = 46, padR = 10, padT = 10, padB = 24;
+  const hasRight = series.some((s) => s.axis === 'right');
+  const padL = 46, padR = hasRight ? 46 : 10, padT = 10, padB = 24;
   const pw = w - padL - padR, ph = h - padT - padB;
-  let yMax = c.fixed;
-  if (!c.fixed) {
-    yMax = 0;
-    for (const s of series) for (const v of s.data) if (v != null && isFinite(v)) yMax = Math.max(yMax, v);
-    yMax = Math.max(yMax * 1.15, 0.5);
-  }
-  const Y = (v) => padT + ph * (1 - Math.min(Math.max(v / yMax, 0), 1));
+  // 双轴独立动态量程：各轴天花板 = 该轴数据最大值 × 1.15，随数据自动伸缩（超出即抬高，尖峰滚出窗口即回落）
+  const axMax = { left: 0, right: 0 };
+  for (const s of series) for (const v of s.data) if (v != null && isFinite(v)) axMax[s.axis === 'right' ? 'right' : 'left'] = Math.max(axMax[s.axis === 'right' ? 'right' : 'left'], v);
+  const leftYMax = c.fixed || Math.max(axMax.left * 1.15, 0.5);
+  const rightYMax = hasRight ? Math.max(axMax.right * 1.15, 0.5) : 0;
+  const YL = (v) => padT + ph * (1 - Math.min(Math.max(v / leftYMax, 0), 1));
+  const YR = (v) => padT + ph * (1 - Math.min(Math.max(v / rightYMax, 0), 1));
+  const Y = (s, v) => (s.axis === 'right' ? YR(v) : YL(v));
   ctx.font = '10px ui-monospace, SFMono-Regular, Menlo, monospace';
   ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
   for (let i = 0; i <= 4; i++) {
@@ -673,8 +675,19 @@ function draw(c) {
     ctx.strokeStyle = 'rgba(34, 54, 79, .08)';
     ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(w - padR, y); ctx.stroke();
     ctx.fillStyle = 'rgba(129, 149, 176, .9)';
-    const val = yMax * (1 - i / 4);
+    const val = leftYMax * (1 - i / 4);
     ctx.fillText(c.unit === '%' ? Math.round(val) + '%' : shortVal(val), padL - 6, y);
+  }
+  if (hasRight) {
+    // 右轴刻度：用该轴系列的颜色着色，与左轴量程相互独立
+    const rSeries = series.find((s) => s.axis === 'right');
+    ctx.fillStyle = rSeries.color;
+    ctx.textAlign = 'left';
+    for (let i = 0; i <= 4; i++) {
+      const y = padT + ph * (i / 4);
+      const val = rightYMax * (1 - i / 4);
+      ctx.fillText(c.unit === '%' ? Math.round(val) + '%' : shortVal(val), w - padR + 6, y);
+    }
   }
   // X 轴 = 实时时钟：t1 每次绘制现取（不得缓存，Review Focus 3）；左边界 = max(首个数据点, now − 窗口)
   const t1 = Date.now();
@@ -710,9 +723,10 @@ function draw(c) {
     for (const i of idx) {
       const v = vals[i];
       if (v == null || !isFinite(v)) { started = false; continue; }
+      if (s.skipZero && v === 0) continue; // 0 值不画点与线、但不断线：跳过点后 started 保持，与下一非 0 点直接连线（T3 段/点逻辑替换后自然覆盖）
       const x = X(st.ts[i]);
-      if (!started) { ctx.moveTo(x, Y(v)); started = true; }
-      else ctx.lineTo(x, Y(v));
+      if (!started) { ctx.moveTo(x, Y(s, v)); started = true; }
+      else ctx.lineTo(x, Y(s, v));
     }
     ctx.stroke();
   }
