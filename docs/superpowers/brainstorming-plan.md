@@ -7,23 +7,15 @@
 
 1. ✅ 探索项目上下文（server.mjs / public/ / config.json / monitor.html 遗留物）
 2. （Visual Companion — 按需才提，目前无视觉问题）
-3. 🔄 澄清问题（逐个问）
-   - [x] Q1 优化方向 → 全选 + 硬约束（单文件静态、零依赖、微信可打开）
-   - [x] Q2 打开方式 → 纯本地文件 + localStorage（不托管）
-   - [x] Q3（用户追加）→ **仓库内禁止出现任何 baseURL/API key**：首次打开为空实例列表 + 添加界面，用户自填端点；已对 main 基线做 sanitization（config.json.example 占位、server.mjs/monitor.html/public 的 gagag 种子与占位符全部去除），`git grep` 验证 0 残留
-   - [ ] 其余设计细节由我定
-
-**git 工作区（using-git-worktrees，用户明确偏好）**：
-- 仓库 `/Users/enterlink_tech/Enter-Link/Project/George/vllm-monitor`；main@3db5aaf=基线（已 sanitization）；开发分支 `feat/static-single-file`
-- 原始 `Documents/Default Project/vllm-monitor` 未动；用户稍后自建 GitHub repo 供 push
-
+3. ✅ 澄清问题：Q1 优化方向（全选+硬约束）；Q2 打开方式（纯本地+localStorage）；Q3 仓库零端点零密钥（已 sanitization，0 残留）
 4. ✅ 方案对比 → 用户选定 **方案 3：双模式（精简/完整）单文件**
-5. 🔄 分段设计：第 1 段（架构/管线/双模式原则）✅；第 2 段（实例管理，修订为"无内置 URL 种子"）✅；第 3 段（双模式视图与移动布局）✅；第 4 段（性能/稳定性 + 迁移清理）进行中
-5. ⬜ 分段呈现设计，逐段确认
-6. ⬜ 写 spec 到 `docs/superpowers/specs/2026-10-08-vllm-monitor-static-design.md` 并提交（注意：项目非 git 仓库，spec 落地前需确认是否初始化 git）
-7. ⬜ spec 自审（占位符/矛盾/歧义/范围）
-8. ⬜ 用户审 spec
-9. ⬜ 交接 writing-plans
+5. ✅ 分段设计（4 段全部逐段确认）：① 架构/管线/双模式原则 ② 实例管理（无内置 URL 种子） ③ 双模式视图与移动布局 ④ 性能/稳定性+迁移清理
+6. ✅ spec 落盘并提交（d99f954）：`docs/superpowers/specs/2026-10-08-vllm-monitor-static-design.md`
+7. ✅ spec 自审（修 4 处：metrics URL 公式 / apiKey 附着 / 退避边界 / main 基线措辞）
+8. ✅ 用户审 spec（通过："没问题，出实施计划"）
+9. 🔄 交接 writing-plans：实施计划已写 `docs/superpowers/plans/2026-10-08-static-single-file-monitor.md`（7 任务 TDD，零依赖测试脚手架 + mock server）；自审修 3 处（冻结时钟、schedule 注入契约、no-burst 测试句柄 bug）；待用户审计划 + 选执行方式（native / subagent-driven）
+
+**git 工作区**：仓库 `/Users/enterlink_tech/Enter-Link/Project/George/vllm-monitor`；main@3db5aaf=已 sanitize 基线；开发分支 `feat/static-single-file`；原始 `Documents/Default Project/vllm-monitor` 未动；用户稍后自建 GitHub repo 供 push
 
 ## 已探明的事实（探测证据，2026-10-08）
 
