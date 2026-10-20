@@ -56,6 +56,10 @@ node tests/parser.test.mjs
 node tests/snapshot.test.mjs
 node tests/instance.test.mjs
 node tests/poller.test.mjs
+node tests/chart.test.mjs
+node tests/ring.test.mjs
+node tests/http.test.mjs
+node tests/render.test.mjs
 ```
 
 mock 端点表（用于验证单文件版各输入场景）：
