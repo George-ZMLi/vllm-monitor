@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>vLLM Monitor · Realtime metrics</title>
+<title>vLLM 实时监控</title>
 <style>
 /* ---------- Outfit（SIL Open Font License 1.1，latin 子集变量字体，base64 内嵌，零外部请求） ---------- */
 @font-face {
@@ -131,7 +131,7 @@ h2 { font-size: 17px; margin: 0; font-weight: 600; }
 
 /* ---------- 卡片（Strata 比例：2fr + 3×1fr） ---------- */
 .cards { display: grid; grid-template-columns: 2fr repeat(3, 1fr); gap: 14px; margin: 24px 0 0; }
-.cards.extra { margin: 0 0 24px; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); display: none; }
+.cards.extra { margin: 14px 0 24px; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); display: none; }
 body.mode-full .cards.extra { display: grid; }
 .card {
   padding: 18px 20px; border: 1px solid var(--st-line); border-radius: 13px;
@@ -335,26 +335,30 @@ footer {
 </head>
 <body>
 <header>
-  <div class="brand">vLLM Monitor <span>Realtime metrics</span></div>
+  <div class="brand" data-brand>vLLM Monitor <span>Realtime metrics</span></div>
   <div class="controls">
+    <select id="lang" title="Language" aria-label="Language">
+      <option value="zh">中文</option>
+      <option value="en">EN</option>
+    </select>
     <select id="instances" title="实例" aria-label="实例" hidden></select>
     <button id="manage" aria-label="管理实例" title="管理实例" hidden>⚙</button>
-    <button id="add" class="primary" type="button">＋ 添加</button>
+    <button id="add" class="primary" type="button" data-i18n="addBtn">＋ 添加</button>
     <button id="theme" aria-label="Switch color theme" title="Light / dark">◐</button>
   </div>
 </header>
 <main>
   <div id="error" class="notice" role="status" hidden></div>
   <section class="welcome panel" id="welcome" hidden>
-    <h2>还没有监控实例</h2>
-    <p>添加一个 vLLM 实例，即可在此实时查看请求、KV 缓存、吞吐与延迟。</p>
-    <button class="primary" id="welcome-add" type="button">＋ 添加监控实例</button>
+    <h2 data-i18n="welcome">还没有监控实例</h2>
+    <p data-i18n="welcomeSub">添加一个 vLLM 实例，即可在此实时查看请求、KV 缓存、吞吐与延迟。</p>
+    <button class="primary" id="welcome-add" type="button" data-i18n="welcomeAdd">＋ 添加监控实例</button>
   </section>
   <section id="dash" hidden>
     <div class="top">
       <div>
-        <h1>Overview</h1>
-        <p class="sub">Model status and request stats, in one place.</p>
+        <h1 data-i18n="overview">总览</h1>
+        <p class="sub" data-i18n="ovSub">模型状态与请求统计，一屏掌握。</p>
       </div>
       <div class="controls">
         <select id="mode" title="卡片显示" aria-label="卡片显示">
@@ -370,30 +374,30 @@ footer {
     </div>
     <section class="cards">
       <div class="card" id="card-model">
-        <div class="label">Model</div>
-        <div class="value idle" id="model-state"><span class="dot"></span><span id="model-label">Waiting…</span></div>
+        <div class="label" data-i18n="model">模型</div>
+        <div class="value idle" id="model-state"><span class="dot"></span><span id="model-label">等待中…</span></div>
         <div class="model" id="model-name">–</div>
       </div>
-      <div class="card"><div class="label">Requests</div><div class="value" id="v-succ">–</div><div class="small" id="s-succ">等待数据…</div></div>
-      <div class="card"><div class="label">Latency</div><div class="value" id="v-e2e">–</div><div class="small" id="s-e2e">p99 – · 端到端累计</div></div>
-      <div class="card"><div class="label">Decode speed</div><div class="value" id="v-gen">–</div><div class="small" id="s-gen">prompt – tok/s</div></div>
+      <div class="card"><div class="label" data-i18n="requests">请求</div><div class="value" id="v-succ">–</div><div class="small" id="s-succ">等待数据…</div></div>
+      <div class="card"><div class="label" data-i18n="latency">延迟</div><div class="value" id="v-e2e">–</div><div class="small" id="s-e2e">p99 – · 端到端累计</div></div>
+      <div class="card"><div class="label" data-i18n="decodeSpeed">解码速度</div><div class="value" id="v-gen">–</div><div class="small" id="s-gen">prompt – tok/s</div></div>
     </section>
     <section class="cards extra" id="cards-extra">
-      <div class="card" id="card-kv"><div class="label">KV cache</div><div class="value" id="v-kv">–</div><div class="small">kv_cache_usage</div></div>
-      <div class="card"><div class="label">Cache hit</div><div class="value" id="v-cache">–</div><div class="small">累计 · cached/prompt</div></div>
-      <div class="card"><div class="label">Prefill speed</div><div class="value" id="v-prompt">–</div><div class="small">实时 · prompt</div></div>
-      <div class="card"><div class="label">TTFT p50</div><div class="value" id="v-ttft">–</div><div class="small">首 token 延迟</div></div>
-      <div class="card"><div class="label">Preemptions</div><div class="value" id="v-preem">–</div><div class="small">preemptions</div></div>
-      <div class="card"><div class="label">Memory</div><div class="value" id="v-mem">–</div><div class="small">resident MB</div></div>
-      <div class="card" id="card-spec" hidden><div class="label">Spec decode</div><div class="value" id="v-spec">–</div><div class="small">accepted/draft tokens</div></div>
+      <div class="card" id="card-kv"><div class="label" data-i18n="kv">KV 缓存</div><div class="value" id="v-kv">–</div><div class="small" data-i18n="kvSub">kv_cache_usage</div></div>
+      <div class="card"><div class="label" data-i18n="cacheHit">缓存命中</div><div class="value" id="v-cache">–</div><div class="small" data-i18n="cacheSub">累计 · cached/prompt</div></div>
+      <div class="card"><div class="label" data-i18n="prefill">预填充速度</div><div class="value" id="v-prompt">–</div><div class="small" data-i18n="prefillSub">实时 · prompt</div></div>
+      <div class="card"><div class="label" data-i18n="ttft">首 token 延迟</div><div class="value" id="v-ttft">–</div><div class="small" data-i18n="ttftSub">TTFT p50</div></div>
+      <div class="card"><div class="label" data-i18n="preem">抢占次数</div><div class="value" id="v-preem">–</div><div class="small" data-i18n="preemSub">preemptions</div></div>
+      <div class="card"><div class="label" data-i18n="mem">内存</div><div class="value" id="v-mem">–</div><div class="small" data-i18n="memSub">resident MB</div></div>
+      <div class="card" id="card-spec" hidden><div class="label" data-i18n="spec">投机解码</div><div class="value" id="v-spec">–</div><div class="small" data-i18n="specSub">accepted/draft tokens</div></div>
     </section>
     <section class="panel">
-      <div class="panel-bar"><h2>Requests</h2><span class="small">全局分位数 · vLLM 不区分路由</span></div>
+      <div class="panel-bar"><h2 data-i18n="reqPanel">请求</h2><span class="small" data-i18n="reqPanelSub">全局分位数 · vLLM 不区分路由</span></div>
       <div class="workspace">
         <div class="routes">
-          <div id="route-empty" class="empty" hidden>无 http_requests_total 数据<br>（旧版 vLLM 可能未暴露该指标）</div>
+          <div id="route-empty" class="empty" data-i18n="routeEmpty" hidden>无 http_requests_total 数据<br>（旧版 vLLM 可能未暴露该指标）</div>
           <table>
-            <thead><tr><th>Method</th><th>Route</th><th class="num">2XX</th><th class="num">4XX</th><th class="num">5XX</th><th class="num">Total</th></tr></thead>
+            <thead><tr><th data-i18n="thMethod">Method</th><th data-i18n="thRoute">Route</th><th class="num" data-i18n="th2">2XX</th><th class="num" data-i18n="th4">4XX</th><th class="num" data-i18n="th5">5XX</th><th class="num" data-i18n="thTotal">Total</th></tr></thead>
             <tbody id="route-body"></tbody>
           </table>
         </div>
@@ -402,13 +406,13 @@ footer {
             <div class="detail-title" id="detail-title">–</div>
             <span class="tag ok" id="detail-tag"></span>
           </div>
-          <div class="small" style="margin-top:6px">请求分位数为全局口径（不区分路由）· 进程启动以来累计</div>
+          <div class="small" style="margin-top:6px" data-i18n="detailNote">请求分位数为全局口径（不区分路由）· 进程启动以来累计</div>
           <div class="facts" id="facts"></div>
         </div>
       </div>
     </section>
     <section class="panel">
-      <div class="panel-bar"><h2>Trends</h2><div class="controls">
+      <div class="panel-bar"><h2 data-i18n="trends">趋势</h2><div class="controls">
         <select id="window" title="数据窗口" aria-label="数据窗口">
           <option value="600000">10 分钟</option>
           <option value="1800000">30 分钟</option>
@@ -416,10 +420,10 @@ footer {
         </select>
       </div></div>
       <div class="trends">
-        <div class="tcell"><h3>请求数量</h3><div class="legend" id="lg1"></div><canvas id="c1"></canvas></div>
-        <div class="tcell"><h3>KV 缓存使用率</h3><div class="legend" id="lg2"></div><canvas id="c2"></canvas></div>
-        <div class="tcell"><h3>Token 吞吐</h3><div class="legend" id="lg3"></div><canvas id="c3"></canvas></div>
-        <div class="tcell"><h3>延迟</h3><div class="legend" id="lg4"></div><canvas id="c4"></canvas></div>
+        <div class="tcell"><h3 data-i18n="t1">请求数量</h3><div class="legend" id="lg1"></div><canvas id="c1"></canvas></div>
+        <div class="tcell"><h3 data-i18n="t2">KV 缓存使用率</h3><div class="legend" id="lg2"></div><canvas id="c2"></canvas></div>
+        <div class="tcell"><h3 data-i18n="t3">Token 吞吐</h3><div class="legend" id="lg3"></div><canvas id="c3"></canvas></div>
+        <div class="tcell"><h3 data-i18n="t4">延迟</h3><div class="legend" id="lg4"></div><canvas id="c4"></canvas></div>
       </div>
     </section>
   </section>
@@ -427,10 +431,10 @@ footer {
 <footer><span id="foot"></span><span id="updated">等待数据…</span></footer>
 <div class="drawer-mask" id="drawer-mask" hidden></div>
 <aside class="drawer" id="drawer" hidden>
-  <div class="panel-bar"><h2>Instances</h2><button id="drawer-close" aria-label="关闭" type="button">×</button></div>
+  <div class="panel-bar"><h2 data-i18n="drawerTitle">实例</h2><button id="drawer-close" aria-label="关闭" title="关闭" type="button">×</button></div>
   <div class="drawer-body">
     <div class="drawer-list" id="drawer-list"></div>
-    <button class="primary" id="drawer-add" type="button">＋ 添加实例</button>
+    <button class="primary" id="drawer-add" type="button" data-i18n="drawerAdd">＋ 添加实例</button>
   </div>
 </aside>
 <div id="modal-root"></div>
@@ -735,6 +739,7 @@ const INTERVAL_KEY = 'vllmmon.interval';
 const MODE_KEY = 'vllmmon.mode';
 const ACTIVE_KEY = 'vllmmon.active';
 const THEME_KEY = 'vllmmon.theme';
+const LANG_KEY = 'vllmmon.lang';
 const WINDOWS = [600000, 1800000, 3600000];   // 数据窗口：10 / 30 / 60 分钟
 const WINDOW_KEY = 'vllmmon.window';
 const FIXED_UA = 'vllm-monitor';              // 固定非空 UA
@@ -867,7 +872,161 @@ function resetCardAnims() {
 }
 
 function footText() {
-  return `数据仅存于本浏览器 · 实例 ${activeName() || '–'} · 每 ${intervalMs / 1000}s · 窗口 ${windowMs / 60000} 分钟`;
+  return T('foot', [activeName() || '–', intervalMs / 1000, windowMs / 60000]);
+}
+
+// ---------- i18n：EN / 简体中文（vllmmon.lang 持久化，缺省 zh）----------
+// 模板占位符 {n} 由 T(key, args) 按序替换；label 型静态元素由 applyI18n 经 data-i18n 刷新
+const I18N = {
+  zh: {
+    'title': 'vLLM 实时监控', 'overview': '总览',
+    'ovSub': '模型状态与请求统计，一屏掌握。',
+    'addBtn': '＋ 添加', 'manage': '管理实例', 'instances': '实例', 'lang': '语言',
+    'model': '模型', 'requests': '请求', 'latency': '延迟', 'decodeSpeed': '解码速度',
+    'kv': 'KV 缓存', 'kvSub': 'kv_cache_usage',
+    'cacheHit': '缓存命中', 'cacheSub': '累计 · cached/prompt',
+    'prefill': '预填充速度', 'prefillSub': '实时 · prompt',
+    'ttft': '首 token 延迟', 'ttftSub': 'TTFT p50',
+    'preem': '抢占次数', 'preemSub': 'preemptions',
+    'mem': '内存', 'memSub': 'resident MB',
+    'spec': '投机解码', 'specSub': 'accepted/draft tokens',
+    'reqPanel': '请求', 'reqPanelSub': '全局分位数 · vLLM 不区分路由',
+    'thMethod': 'Method', 'thRoute': 'Route', 'th2': '2XX', 'th4': '4XX', 'th5': '5XX', 'thTotal': 'Total',
+    'routeEmpty': '无 http_requests_total 数据<br>（旧版 vLLM 可能未暴露该指标）',
+    'detailNote': '请求分位数为全局口径（不区分路由）· 进程启动以来累计',
+    'trends': '趋势', 't1': '请求数量', 't2': 'KV 缓存使用率', 't3': 'Token 吞吐', 't4': '延迟',
+    'w10': '10 分钟', 'w30': '30 分钟', 'w60': '60 分钟',
+    'mLite': '精简', 'mFull': '完整', 'mode': '卡片显示', 'interval': '轮询间隔', 'window': '数据窗口',
+    'wait': '等待数据…', 'stWaiting': 'Waiting…', 'stRunning': '运行中', 'stQueued': '排队中', 'stIdle': '空闲', 'stDisconnected': '已断连',
+    'liveUpdated': 'Live · 更新 {0}', 'disconnectedRetry': 'Disconnected · retrying',
+    'sSucc': '{0} running · {1} waiting', 'sE2e': 'p99 {0} · 端到端累计', 'sGen': 'prompt {0} tok/s',
+    'sE2eIdle': 'p99 – · 端到端累计', 'sGenIdle': 'prompt – tok/s',
+    'fq.p50': '队列等待 p50', 'fq.p99': '队列等待 p99',
+    'ft.p50': '首 token p50', 'ft.p99': '首 token p99',
+    'e2e.p50': '端到端 p50', 'e2e.p99': '端到端 p99',
+    'decode.speed': '解码速度', 'pt': 'Prompt tokens', 'gt': 'Generation tokens',
+    'cache.hit': '缓存命中', 'preem': '抢占次数', 'spec.accept': '投机解码接受率',
+    'foot': '数据仅存于本浏览器 · 实例 {0} · 每 {1}s · 窗口 {2} 分钟',
+    'welcome': '还没有监控实例', 'welcomeSub': '添加一个 vLLM 实例，即可在此实时查看请求、KV 缓存、吞吐与延迟。', 'welcomeAdd': '＋ 添加监控实例',
+    'drawerTitle': '实例', 'drawerAdd': '＋ 添加实例',
+    'switchTo': '切换到此实例', 'disable': '停用', 'enable': '启用', 'deleteInst': '删除实例', 'optDisabled': '（已停用）',
+    'deleteConfirm': '删除实例 “{0}”？',
+    'bannerRetry': '自动退避重试中', 'bannerCors': '网络不可达或 CORS 拦截 · vLLM 服务端加 --allowed-origins http://<本页地址> 后可直连', 'bannerAuth': '鉴权失败 · 检查 API Key',
+    'bannerLine': '实例 “{0}” {1}',
+    'modalTitle': '添加监控实例', 'fName': '名称', 'fNamePh': '实例名称',
+    'fPath': 'metrics 路径（可选）', 'fPathPh': '/vllm/metrics', 'hintAuto': '留空 = 自动 origin+/metrics',
+    'fKey': 'API Key（可选）', 'fKeyPh': 'sk-…（以 Bearer 头随请求发送）', 'hintLocal': '仅存本机',
+    'chkEnable': '添加后启用监控', 'cancel': '取消', 'add': '添加',
+    'testing': '正在测试连接…', 'connected': '连接成功：模型 {0}，含 vllm:* 指标 {1} 条', 'invalid': '输入无效',
+    'toastNoStorage': '本地设置无法保存，刷新后丢失',
+  },
+  en: {
+    'title': 'vLLM Monitor', 'overview': 'Overview',
+    'ovSub': 'Model status and request stats, in one place.',
+    'addBtn': '+ Add', 'manage': 'Manage instances', 'instances': 'Instance', 'lang': 'Language',
+    'model': 'Model', 'requests': 'Requests', 'latency': 'Latency', 'decodeSpeed': 'Decode speed',
+    'kv': 'KV cache', 'kvSub': 'kv_cache_usage',
+    'cacheHit': 'Cache hit', 'cacheSub': 'cumulative · cached/prompt',
+    'prefill': 'Prefill speed', 'prefillSub': 'realtime · prompt',
+    'ttft': 'TTFT p50', 'ttftSub': 'first token latency',
+    'preem': 'Preemptions', 'preemSub': 'preemptions',
+    'mem': 'Memory', 'memSub': 'resident MB',
+    'spec': 'Spec decode', 'specSub': 'accepted/draft tokens',
+    'reqPanel': 'Requests', 'reqPanelSub': 'global percentiles · vLLM does not separate routes',
+    'thMethod': 'Method', 'thRoute': 'Route', 'th2': '2XX', 'th4': '4XX', 'th5': '5XX', 'thTotal': 'Total',
+    'routeEmpty': 'No http_requests_total data<br>(older vLLM may not expose this metric)',
+    'detailNote': 'Request percentiles are global (not per route) · cumulative since process start',
+    'trends': 'Trends', 't1': 'Requests', 't2': 'KV cache usage', 't3': 'Token throughput', 't4': 'Latency',
+    'w10': '10 min', 'w30': '30 min', 'w60': '60 min',
+    'mLite': 'Lite', 'mFull': 'Full', 'mode': 'Card display', 'interval': 'Poll interval', 'window': 'Data window',
+    'wait': 'Waiting for data…', 'stWaiting': 'Waiting…', 'stRunning': 'Running', 'stQueued': 'Queued', 'stIdle': 'Idle', 'stDisconnected': 'Disconnected',
+    'liveUpdated': 'Live · updated {0}', 'disconnectedRetry': 'Disconnected · retrying',
+    'sSucc': '{0} running · {1} waiting', 'sE2e': 'p99 {0} · cumulative e2e', 'sGen': 'prompt {0} tok/s',
+    'sE2eIdle': 'p99 – · cumulative e2e', 'sGenIdle': 'prompt – tok/s',
+    'fq.p50': 'Queue wait p50', 'fq.p99': 'Queue wait p99',
+    'ft.p50': 'First token p50', 'ft.p99': 'First token p99',
+    'e2e.p50': 'End-to-end p50', 'e2e.p99': 'End-to-end p99',
+    'decode.speed': 'Decode speed', 'pt': 'Prompt tokens', 'gt': 'Generation tokens',
+    'cache.hit': 'Cache hit', 'preem': 'Preemptions', 'spec.accept': 'Spec decode accept',
+    'foot': 'Data stays in this browser · Instance {0} · Every {1}s · Window {2} min',
+    'welcome': 'No instances yet', 'welcomeSub': 'Add a vLLM instance to watch requests, KV cache, throughput and latency in real time.', 'welcomeAdd': '+ Add instance',
+    'drawerTitle': 'Instances', 'drawerAdd': '+ Add instance',
+    'switchTo': 'Switch to this instance', 'disable': 'Disable', 'enable': 'Enable', 'deleteInst': 'Remove instance', 'optDisabled': ' (disabled)',
+    'deleteConfirm': 'Remove instance "{0}"?',
+    'bannerRetry': 'auto-backoff retry in progress', 'bannerCors': 'network unreachable or CORS blocked · add --allowed-origins http://<page origin> to the vLLM server to connect directly', 'bannerAuth': 'auth failed · check API Key',
+    'bannerLine': 'Instance "{0}" {1}',
+    'modalTitle': 'Add instance', 'fName': 'Name', 'fNamePh': 'Instance name',
+    'fPath': 'metrics path (optional)', 'fPathPh': '/vllm/metrics', 'hintAuto': 'empty = auto origin+/metrics',
+    'fKey': 'API Key (optional)', 'fKeyPh': 'sk-… (sent as Bearer header)', 'hintLocal': 'stored locally only',
+    'chkEnable': 'Enable monitoring after adding', 'cancel': 'Cancel', 'add': 'Add',
+    'testing': 'Testing connection…', 'connected': 'Connected: model {0}, {1} vllm:* metrics', 'invalid': 'Invalid input',
+    'toastNoStorage': 'Local settings cannot be saved; they will be lost on refresh',
+  },
+};
+
+let lang = 'zh';
+function T(key, args) {
+  let s = I18N[lang][key] ?? I18N.zh[key] ?? key;
+  if (args) s = s.replace(/\{(\d+)\}/g, (m, i) => (args[Number(i)] ?? '') + '');
+  return s;
+}
+// 测试钩子：跨沙箱切换语言（vm 中无法直接改模块级 let）
+T.__setLang = (l) => { if (l === 'en' || l === 'zh') lang = l; };
+
+// 按 value 替换 select 各 option 的显示文案（保持选中项不变）
+function selectOptionText(sel, map) {
+  for (const o of sel.options) if (map[o.value] != null) o.text = map[o.value];
+}
+
+// 刷新所有 data-i18n 静态元素（data-i18n → innerHTML（支持 <br>）；data-i18n-ph → placeholder；data-i18n-aria → aria-label/title）
+function applyI18n() {
+  document.title = T('title');
+  const brand = document.querySelector('[data-brand]');
+  if (brand) brand.innerHTML = lang === 'zh' ? 'vLLM 监控' : 'vLLM Monitor';
+  document.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'en';
+  for (const el of document.querySelectorAll('[data-i18n]')) {
+    const s = T(el.dataset.i18n);
+    if (el.tagName === 'LABEL') { // 标签文字在 input 前，只换 text node（不动子元素）
+      el.textContent = s + ' ';
+      const inp = el.querySelector('input');
+      if (inp) el.appendChild(inp);
+    } else {
+      el.innerHTML = s;
+    }
+  }
+  for (const el of document.querySelectorAll('[data-i18n-ph]')) el.placeholder = T(el.dataset.i18nPh);
+  for (const el of document.querySelectorAll('[data-i18n-aria]')) {
+    const k = el.dataset.i18nAria;
+    if (el.hasAttribute('title')) el.title = T(k);
+    if (el.hasAttribute('aria-label')) el.setAttribute('aria-label', T(k));
+  }
+  $('instances').ariaLabel = T('instances');
+  selectOptionText($('mode'), { lite: T('mLite'), full: T('mFull') });
+  selectOptionText($('window'), { '600000': T('w10'), '1800000': T('w30'), '3600000': T('w60') });
+  if (!lastSnapOf.has(activeId) && !$('dash').hidden) {
+    // 空态：等待文案随语言刷新（有缓存快照时由 renderUp 负责）
+    $('s-succ').textContent = T('wait');
+    $('s-e2e').textContent = T('sE2eIdle');
+    $('s-gen').textContent = T('sGenIdle');
+    $('updated').textContent = T('wait');
+  } else if (lastSnapOf.has(activeId)) {
+    renderFacts(lastSnapOf.get(activeId));
+  }
+}
+
+function setLang(l) {
+  if (l !== 'en' && l !== 'zh') l = 'zh';
+  lang = l;
+  try { if (storageRef) storageRef.setItem(LANG_KEY, l); } catch { /* 忽略 */ }
+  applyI18n();
+  $('lang').value = l;
+  if (activeId) {
+    // 有缓存快照 → 重放一次 renderUp，刷新所有动态文案（sSucc/sE2e/updated/foot/facts）
+    const snap = lastSnapOf.get(activeId);
+    if (snap) renderUp(snap);
+    else $('foot').textContent = footText();
+  }
+  CHARTS.forEach((c) => { draw(c); legend(c); });
 }
 
 // Strata token 四色（accent/info/warn/danger），双主题下均可读
@@ -1065,14 +1224,14 @@ function refreshActive() {
   const snap = lastSnapOf.get(activeId);
   if (snap) { renderUp(snap); return; }
   resetCardAnims();
-  setModelState({ cls: 'idle', label: 'Waiting…' });
+  setModelState({ cls: 'idle', key: 'stWaiting' });
   $('model-name').textContent = modelLabel(modelsOf.get(activeId) || []);
-  $('s-succ').textContent = '等待数据…';
-  $('s-e2e').textContent = 'p99 – · 端到端累计';
-  $('s-gen').textContent = 'prompt – tok/s';
+  $('s-succ').textContent = T('wait');
+  $('s-e2e').textContent = T('sE2eIdle');
+  $('s-gen').textContent = T('sGenIdle');
   renderRoutes([]);
   renderFacts(null);
-  $('updated').textContent = '等待数据…';
+  $('updated').textContent = T('wait');
   $('updated').className = '';
   CHARTS.forEach((c) => { draw(c); legend(c); });
 }
@@ -1084,40 +1243,40 @@ function modelLabel(models) {
   return ms.length <= 2 ? ms.join(' · ') : ms.slice(0, 2).join(' · ') + ' +' + (ms.length - 2);
 }
 
-// MODEL 卡状态：断连 > running > waiting > idle
+// MODEL 卡状态：断连 > running > waiting > idle；key 为 i18n key（渲染层经 T() 翻译）
 function modelState(snap) {
-  if (!snap.up) return { cls: 'down', label: 'Disconnected' };
+  if (!snap.up) return { cls: 'down', key: 'stDisconnected' };
   const g = snap.gauges || {};
-  if ((g.running || 0) > 0) return { cls: 'run', label: 'Running' };
-  if ((g.waiting || 0) > 0) return { cls: 'wait', label: 'Queued' };
-  return { cls: 'idle', label: 'Idle' };
+  if ((g.running || 0) > 0) return { cls: 'run', key: 'stRunning' };
+  if ((g.waiting || 0) > 0) return { cls: 'wait', key: 'stQueued' };
+  return { cls: 'idle', key: 'stIdle' };
 }
 
-// Requests 面板右侧 facts 网格数据：UISnap → [{label, value}]（value 已格式化）
+// Requests 面板右侧 facts 网格数据：UISnap → [{label, value}]（value 已格式化；label 为 i18n key，渲染层经 T() 翻译）
 function factsFromSnap(snap) {
   const g = snap.gauges || {};
   const h = snap.hist || {};
   const pct = (v) => (v == null || !isFinite(v)) ? '–' : v.toFixed(1) + '%';
   return [
-    { label: '队列等待 p50', value: fmtS(h.request_queue_time_seconds?.p50) },
-    { label: '队列等待 p99', value: fmtS(h.request_queue_time_seconds?.p99) },
-    { label: '首 token p50', value: fmtS(h.time_to_first_token_seconds?.p50) },
-    { label: '首 token p99', value: fmtS(h.time_to_first_token_seconds?.p99) },
-    { label: '端到端 p50', value: fmtS(h.e2e_request_latency_seconds?.p50) },
-    { label: '端到端 p99', value: fmtS(h.e2e_request_latency_seconds?.p99) },
-    { label: '解码速度', value: snap.rates?.generationTokensPerS != null ? fmtN(snap.rates.generationTokensPerS) + ' tok/s' : '–' },
-    { label: 'Prompt tokens', value: fmtN(g.promptTokens) },
-    { label: 'Generation tokens', value: fmtN(g.generationTokens) },
-    { label: '缓存命中', value: pct(snap.cacheHit) },
-    { label: '抢占次数', value: fmtN(g.preemptions) },
-    { label: '投机解码接受率', value: snap.specDecode ? (snap.specDecode.acceptRate * 100).toFixed(1) + '%' : '–' },
+    { label: 'fq.p50', value: fmtS(h.request_queue_time_seconds?.p50) },
+    { label: 'fq.p99', value: fmtS(h.request_queue_time_seconds?.p99) },
+    { label: 'ft.p50', value: fmtS(h.time_to_first_token_seconds?.p50) },
+    { label: 'ft.p99', value: fmtS(h.time_to_first_token_seconds?.p99) },
+    { label: 'e2e.p50', value: fmtS(h.e2e_request_latency_seconds?.p50) },
+    { label: 'e2e.p99', value: fmtS(h.e2e_request_latency_seconds?.p99) },
+    { label: 'decode.speed', value: snap.rates?.generationTokensPerS != null ? fmtN(snap.rates.generationTokensPerS) + ' tok/s' : '–' },
+    { label: 'pt', value: fmtN(g.promptTokens) },
+    { label: 'gt', value: fmtN(g.generationTokens) },
+    { label: 'cache.hit', value: pct(snap.cacheHit) },
+    { label: 'preem', value: fmtN(g.preemptions) },
+    { label: 'spec.accept', value: snap.specDecode ? (snap.specDecode.acceptRate * 100).toFixed(1) + '%' : '–' },
   ];
 }
 
-// MODEL 卡状态（呼吸圆点 + 状态词）
+// MODEL 卡状态（呼吸圆点 + 状态词）；st.key 为 i18n key
 function setModelState(st) {
   $('model-state').className = 'value ' + st.cls;
-  $('model-label').textContent = st.label;
+  $('model-label').textContent = T(st.key);
 }
 
 // Requests 面板：路由表行（http_requests_total 按 handler 聚合；点击选行高亮，重渲染保持选择）
@@ -1152,10 +1311,10 @@ function updateRouteDetail() {
   $('detail-tag').textContent = row ? 'total ' + fmtN(row.total) : '';
 }
 
-// Requests 面板：右侧 facts 网格
+// Requests 面板：右侧 facts 网格（label 为 i18n key，经 T 翻译）
 function renderFacts(snap) {
   $('facts').innerHTML = factsFromSnap(snap || { gauges: {}, hist: {} })
-    .map((f) => '<div class="fact"><span>' + esc(f.label) + '</span><b>' + esc(f.value) + '</b></div>')
+    .map((f) => '<div class="fact"><span>' + esc(T(f.label)) + '</span><b>' + esc(f.value) + '</b></div>')
     .join('');
 }
 
@@ -1167,12 +1326,12 @@ function renderUp(snap) {
   setModelState(modelState(snap));
   $('model-name').textContent = modelLabel(snap.models);
   animTo('v-succ', snap.successTotal);
-  $('s-succ').textContent = (g.running ?? 0) + ' running · ' + (g.waiting ?? 0) + ' waiting';
+  $('s-succ').textContent = T('sSucc', [g.running ?? 0, g.waiting ?? 0]);
   const e2e = snap.hist['e2e_request_latency_seconds'];
   animTo('v-e2e', e2e?.p50);
-  $('s-e2e').textContent = 'p99 ' + fmtS(e2e?.p99) + ' · 端到端累计';
+  $('s-e2e').textContent = T('sE2e', [fmtS(e2e?.p99)]);
   animTo('v-gen', snap.rates?.generationTokensPerS ?? null);
-  $('s-gen').textContent = 'prompt ' + fmtN(snap.rates?.promptTokensPerS) + ' tok/s';
+  $('s-gen').textContent = T('sGen', [fmtN(snap.rates?.promptTokensPerS)]);
   animTo('v-kv', g.kvPct);
   $('card-kv').classList.toggle('kv-hot', g.kvPct >= 90);
   $('card-kv').classList.toggle('kv-warm', g.kvPct >= 70 && g.kvPct < 90);
@@ -1190,7 +1349,8 @@ function renderUp(snap) {
   renderRoutes(snap.routes || []);
   renderFacts(snap);
   document.body.classList.remove('stale');
-  $('updated').textContent = 'Live · 更新 ' + new Date(snap.ts).toLocaleTimeString('zh-CN', { hour12: false });
+  const time = new Date(snap.ts).toLocaleTimeString(lang === 'zh' ? 'zh-CN' : 'en-US', { hour12: false });
+  $('updated').textContent = T('liveUpdated', [time]);
   $('updated').className = 'live';
   $('foot').textContent = footText();
   CHARTS.forEach((c) => { draw(c); legend(c); });
@@ -1203,7 +1363,7 @@ function renderDown() {
   $('s-e2e').textContent = '—';
   $('s-gen').textContent = '—';
   resetCardAnims(); // 断连：数字卡全部归位 –（清 shown/anims，取消共享 rAF）
-  $('updated').textContent = 'Disconnected · retrying';
+  $('updated').textContent = T('disconnectedRetry');
   $('updated').className = 'dead';
 }
 
@@ -1320,14 +1480,14 @@ function refreshBanner() {
   if (failedSet.size === 0) { el.hidden = true; el.textContent = ''; return; }
   const hint = (id) => {
     const f = failInfo.get(id);
-    if (!f) return '已断连，自动退避重试中';
-    if (f.code === 'blocked') return '网络不可达或 CORS 拦截 · vLLM 服务端加 --allowed-origins http://<本页地址> 后可直连';
-    if (f.code === 'auth') return '鉴权失败 · 检查 API Key';
-    return (f.msg || '已断连') + ' · 自动退避重试中';
+    if (!f) return T('bannerRetry');
+    if (f.code === 'blocked') return T('bannerCors');
+    if (f.code === 'auth') return T('bannerAuth');
+    return f.msg + ' · ' + T('bannerRetry');
   };
   el.textContent = [...failedSet].map((id) => {
     const t = targets.find((x) => x.id === id);
-    return `实例 “${t ? t.name : id}” ${hint(id)}`;
+    return T('bannerLine', [t ? t.name : id, hint(id)]);
   }).join('\n');
   el.hidden = false;
 }
@@ -1338,7 +1498,7 @@ function refreshBanner() {
 function renderInstances() {
   const sel = $('instances');
   sel.innerHTML = targets.map((t) =>
-    `<option value="${esc(t.id)}"${t.id === activeId ? ' selected' : ''}>${esc(t.name)}${t.enabled ? '' : '（已停用）'}</option>`).join('');
+    `<option value="${esc(t.id)}"${t.id === activeId ? ' selected' : ''}>${esc(t.name)}${t.enabled ? '' : T('optDisabled')}</option>`).join('');
   sel.hidden = targets.length === 0;
   $('manage').hidden = targets.length === 0;
 
@@ -1347,12 +1507,12 @@ function renderInstances() {
   list.innerHTML = targets.map((t) => {
     const dotCls = 'dot' + (t.enabled ? '' : ' off') + (failedSet.has(t.id) ? ' down' : '');
     return `<div class="drow${t.id === activeId ? ' active' : ''}" data-id="${esc(t.id)}">
-      <div class="info" title="切换到此实例">
+      <div class="info" title="${esc(T('switchTo'))}">
         <div class="name"><i class="${dotCls}"></i>${esc(t.name)}</div>
         <div class="url">${esc(metricsUrlOf(t.baseURL, t.metricsPath))}</div>
       </div>
-      <button class="tg${t.enabled ? ' on' : ''}" data-act="toggle" title="${t.enabled ? '停用' : '启用'}" type="button"></button>
-      <button class="x" data-act="remove" title="删除实例" type="button">×</button>
+      <button class="tg${t.enabled ? ' on' : ''}" data-act="toggle" title="${esc(T(t.enabled ? 'disable' : 'enable'))}" type="button"></button>
+      <button class="x" data-act="remove" title="${esc(T('deleteInst'))}" type="button">×</button>
     </div>`;
   }).join('');
   list.querySelectorAll('.drow').forEach((row) => {
@@ -1394,7 +1554,7 @@ function setActive(id) {
 }
 
 function removeTarget(t) {
-  if (!confirm(`删除实例 “${t.name}”？`)) return;
+  if (!confirm(T('deleteConfirm', [t.name]))) return;
   const list = targets.filter((x) => x.id !== t.id);
   saveTargets(storageRef, list);
   if (activeId === t.id) activeId = list[0] ? list[0].id : null;
@@ -1417,17 +1577,17 @@ function openAddModal() {
   root.innerHTML = `
   <div class="mask" id="modal">
     <div class="modal">
-      <h3>添加监控实例</h3>
-      <label>名称<input id="f-name" placeholder="实例名称" autocomplete="off"></label>
+      <h3 data-i18n="modalTitle">添加监控实例</h3>
+      <label data-i18n="fName">名称<input id="f-name" data-i18n-ph="fNamePh" placeholder="实例名称" autocomplete="off"></label>
       <label>Base URL<input id="f-base" placeholder="https://your-vllm.example.com/v1" autocomplete="off" spellcheck="false"></label>
-      <label>metrics 路径（可选）<input id="f-path" placeholder="/vllm/metrics" autocomplete="off" spellcheck="false"></label>
-      <p class="hint">留空 = 自动 origin+/metrics</p>
-      <label>API Key（可选）<input id="f-key" type="password" placeholder="sk-…（以 Bearer 头随请求发送）" autocomplete="off"></label>
-      <p class="hint">仅存本机</p>
-      <label class="chk"><input type="checkbox" id="f-enabled" checked>添加后启用监控</label>
+      <label data-i18n="fPath">metrics 路径（可选）<input id="f-path" data-i18n-ph="fPathPh" placeholder="/vllm/metrics" autocomplete="off" spellcheck="false"></label>
+      <p class="hint" data-i18n="hintAuto">留空 = 自动 origin+/metrics</p>
+      <label data-i18n="fKey">API Key（可选）<input id="f-key" type="password" data-i18n-ph="fKeyPh" placeholder="sk-…（以 Bearer 头随请求发送）" autocomplete="off"></label>
+      <p class="hint" data-i18n="hintLocal">仅存本机</p>
+      <label class="chk"><input type="checkbox" id="f-enabled" checked><span data-i18n="chkEnable">添加后启用监控</span></label>
       <div class="mrow">
-        <button class="btn ghost" id="f-cancel" type="button">取消</button>
-        <button class="btn primary" id="f-add" type="button">添加</button>
+        <button class="btn ghost" id="f-cancel" type="button" data-i18n="cancel">取消</button>
+        <button class="btn primary" id="f-add" type="button" data-i18n="add">添加</button>
       </div>
       <p class="merr" id="f-msg" hidden></p>
     </div>
@@ -1457,12 +1617,12 @@ async function addInstance() {
   msg.hidden = true;
   let t;
   try { t = makeTarget({ name, baseURL, metricsPath, apiKey, enabled }); }
-  catch (e) { msg.textContent = e.message || '输入无效'; msg.className = 'merr'; msg.hidden = false; return; }
+  catch (e) { msg.textContent = e.message || T('invalid'); msg.className = 'merr'; msg.hidden = false; return; }
 
   // 保存前自动跑一次测试连接
   btn.disabled = true;
   msg.className = 'merr dim';
-  msg.textContent = '正在测试连接…';
+  msg.textContent = T('testing');
   msg.hidden = false;
   const r = await testConnection(t);
   if (root.querySelector('#modal') == null) return; // 测试期间弹窗已被关闭
@@ -1477,7 +1637,7 @@ async function addInstance() {
   activeId = t.id;
   applyTargets(list);
   btn.disabled = false;
-  msg.textContent = `连接成功：模型 ${modelLabel(r.models)}，含 vllm:* 指标 ${r.vllmCount} 条`;
+  msg.textContent = T('connected', [modelLabel(r.models), r.vllmCount]);
   msg.className = 'merr ok';
   setTimeout(closeModal, 700); // 成功提示短暂可见后自动关闭
 }
@@ -1555,6 +1715,11 @@ function boot() {
   try { savedTheme = storageRef ? storageRef.getItem(THEME_KEY) : 'dark'; } catch { /* 忽略 */ }
   document.documentElement.dataset.theme = savedTheme === 'light' ? 'light' : 'dark';
 
+  // 语言：vllmmon.lang 缺省 zh
+  let savedLang = null;
+  try { savedLang = storageRef ? storageRef.getItem(LANG_KEY) : null; } catch { /* 忽略 */ }
+  lang = savedLang === 'en' ? 'en' : 'zh';
+
   // 活动实例
   let savedActive = null;
   try { savedActive = storageRef ? storageRef.getItem(ACTIVE_KEY) : null; } catch { /* 忽略 */ }
@@ -1581,8 +1746,10 @@ function boot() {
   setMode(savedMode, false);
   $('mode').addEventListener('change', () => setMode($('mode').value, true));
 
-  // 主题 / 实例管理 / 抽屉
+  // 主题 / 语言 / 实例管理 / 抽屉
   $('theme').addEventListener('click', () => setTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'));
+  $('lang').value = lang;
+  $('lang').addEventListener('change', () => setLang($('lang').value));
   $('add').addEventListener('click', openAddModal);
   $('manage').addEventListener('click', openDrawer);
   $('drawer-close').addEventListener('click', closeDrawer);
@@ -1598,6 +1765,9 @@ function boot() {
     renderRoutes((lastSnapOf.get(activeId) || {}).routes || []);
   });
 
+  // 静态 i18n 首刷（在 applyTargets 前，确保欢迎态/空态文案已就位）
+  applyI18n();
+
   // 空列表 → 欢迎态
   applyTargets(loaded);
   $('welcome-add').addEventListener('click', openAddModal);
@@ -1612,7 +1782,7 @@ function boot() {
 }
 
 // ---------- Node 测试钩子（固定尾部，勿动）----------
-if (typeof module !== 'undefined' && module.exports) module.exports = { parseLabels, parseProm, sumSeries, histogram, percentile, HISTS, buildSnapshot, computeRates, httpStats, metricsUrlOf, makeTarget, loadTargets, saveTargets, classifyFailure, nextDelayMs, intervalFor, createPoller, VALUE_KEYS, evict, xFrac, pickTickStep, decimIdx, modelState, factsFromSnap };
+if (typeof module !== 'undefined' && module.exports) module.exports = { parseLabels, parseProm, sumSeries, histogram, percentile, HISTS, buildSnapshot, computeRates, httpStats, metricsUrlOf, makeTarget, loadTargets, saveTargets, classifyFailure, nextDelayMs, intervalFor, createPoller, VALUE_KEYS, evict, xFrac, pickTickStep, decimIdx, modelState, factsFromSnap, T };
 if (typeof document !== 'undefined' && typeof boot === 'function' && document.getElementById) boot();
 </script>
 </body>

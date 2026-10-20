@@ -2,19 +2,22 @@
 import assert from 'node:assert/strict';
 import { loadCore, test, deepEqual } from './helpers.mjs';
 
-const { modelState, factsFromSnap } = loadCore();
+const { modelState, factsFromSnap, T } = loadCore();
 
-test('modelState: running > 0 → Running', () => {
-  assert.ok(deepEqual(modelState({ up: true, gauges: { running: 2, waiting: 0 } }), { cls: 'run', label: 'Running' }));
+// 语言固定为 zh（T() 依赖模块级 lang 状态）
+T.__setLang && T.__setLang('zh');
+
+test('modelState: running > 0 → stRunning', () => {
+  assert.ok(deepEqual(modelState({ up: true, gauges: { running: 2, waiting: 0 } }), { cls: 'run', key: 'stRunning' }));
 });
-test('modelState: running 0 + waiting > 0 → Queued', () => {
-  assert.ok(deepEqual(modelState({ up: true, gauges: { running: 0, waiting: 3 } }), { cls: 'wait', label: 'Queued' }));
+test('modelState: running 0 + waiting > 0 → stQueued', () => {
+  assert.ok(deepEqual(modelState({ up: true, gauges: { running: 0, waiting: 3 } }), { cls: 'wait', key: 'stQueued' }));
 });
-test('modelState: 均为 0 → Idle', () => {
-  assert.ok(deepEqual(modelState({ up: true, gauges: { running: 0, waiting: 0 } }), { cls: 'idle', label: 'Idle' }));
+test('modelState: 均为 0 → stIdle', () => {
+  assert.ok(deepEqual(modelState({ up: true, gauges: { running: 0, waiting: 0 } }), { cls: 'idle', key: 'stIdle' }));
 });
-test('modelState: 断连 → Disconnected（优先于 running）', () => {
-  assert.ok(deepEqual(modelState({ up: false, gauges: { running: 2, waiting: 0 } }), { cls: 'down', label: 'Disconnected' }));
+test('modelState: 断连 → stDisconnected（优先于 running）', () => {
+  assert.ok(deepEqual(modelState({ up: false, gauges: { running: 2, waiting: 0 } }), { cls: 'down', key: 'stDisconnected' }));
 });
 
 const SNAP = {
@@ -39,22 +42,22 @@ const SNAP = {
   routes: [],
 };
 
-test('factsFromSnap: 12 项 facts（label + 格式化值）', () => {
+test('factsFromSnap: 12 项 facts（i18n key label + 格式化值）', () => {
   const facts = factsFromSnap(SNAP);
   assert.equal(facts.length, 12);
   const by = Object.fromEntries(facts.map((f) => [f.label, f.value]));
-  assert.equal(by['队列等待 p50'], '50 ms');
-  assert.equal(by['队列等待 p99'], '900 ms');
-  assert.equal(by['首 token p50'], '600 ms');
-  assert.equal(by['首 token p99'], '1.90 s');
-  assert.equal(by['端到端 p50'], '1.20 s');
-  assert.equal(by['端到端 p99'], '8.80 s');
-  assert.equal(by['解码速度'], '120 tok/s');
-  assert.equal(by['Prompt tokens'], '1000');
-  assert.equal(by['Generation tokens'], '2000');
-  assert.equal(by['缓存命中'], '30.0%');
-  assert.equal(by['抢占次数'], '5.00'); // fmtN 口径（与现有 preemptions 卡一致）
-  assert.equal(by['投机解码接受率'], '80.0%');
+  assert.equal(by['fq.p50'], '50 ms');
+  assert.equal(by['fq.p99'], '900 ms');
+  assert.equal(by['ft.p50'], '600 ms');
+  assert.equal(by['ft.p99'], '1.90 s');
+  assert.equal(by['e2e.p50'], '1.20 s');
+  assert.equal(by['e2e.p99'], '8.80 s');
+  assert.equal(by['decode.speed'], '120 tok/s');
+  assert.equal(by['pt'], '1000');
+  assert.equal(by['gt'], '2000');
+  assert.equal(by['cache.hit'], '30.0%');
+  assert.equal(by['preem'], '5.00'); // fmtN 口径（与现有 preemptions 卡一致）
+  assert.equal(by['spec.accept'], '80.0%');
 });
 
 test('factsFromSnap: 直方图缺失 / rates 缺失 / 无投机解码 / 无缓存命中 → –', () => {
@@ -66,9 +69,34 @@ test('factsFromSnap: 直方图缺失 / rates 缺失 / 无投机解码 / 无缓�
     hist: { request_queue_time_seconds: { count: 0, avg: null, p50: null, p99: null } },
   };
   const by = Object.fromEntries(factsFromSnap(snap).map((f) => [f.label, f.value]));
-  assert.equal(by['队列等待 p50'], '–');
-  assert.equal(by['首 token p50'], '–'); // 整个 hist key 缺失
-  assert.equal(by['解码速度'], '–');
-  assert.equal(by['缓存命中'], '–');
-  assert.equal(by['投机解码接受率'], '–');
+  assert.equal(by['fq.p50'], '–');
+  assert.equal(by['ft.p50'], '–'); // 整个 hist key 缺失
+  assert.equal(by['decode.speed'], '–');
+  assert.equal(by['cache.hit'], '–');
+  assert.equal(by['spec.accept'], '–');
+});
+
+// ---------- T()：i18n 翻译（zh 缺省 / en 切换 / 占位符替换 / 缺失回落 key）----------
+
+test('T(zh): 默认语言返回中文', () => {
+  assert.equal(T('requests'), '请求');
+  assert.equal(T('stRunning'), '运行中');
+  assert.equal(T('latency'), '延迟');
+});
+
+test('T(en): 切换语言返回英文', () => {
+  T.__setLang('en');
+  assert.equal(T('requests'), 'Requests');
+  assert.equal(T('stRunning'), 'Running');
+  assert.equal(T('latency'), 'Latency');
+  T.__setLang('zh'); // 还原，避免污染后续测试
+});
+
+test('T: 占位符按序替换（sSucc / foot）', () => {
+  assert.equal(T('sSucc', [4, 3]), '4 running · 3 waiting');
+  assert.equal(T('foot', ['prod', 2, 30]), '数据仅存于本浏览器 · 实例 prod · 每 2s · 窗口 30 分钟');
+});
+
+test('T: 缺失 key 回落为 key 本身', () => {
+  assert.equal(T('no.such.key'), 'no.such.key');
 });
