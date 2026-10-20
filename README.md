@@ -2,10 +2,17 @@
 
 零依赖的 vLLM metrics 实时监控面板：多实例、TTFT/ITL/延迟直方图、KV Cache 使用率、抢占、速率、投机解码接受率等。全部端点信息仅占位示例，请替换为你自己的 vLLM 服务地址（如 `https://your-vllm.example.com/v1`）。
 
+## 视觉与交互参考
+
+本项目的 UI 视觉风格（配色 token、卡片布局、暗/亮主题、Outfit 字体）参考了 **Strata**（本地推理框架）的 Web API Monitor 界面。Strata 的设计 token 派生自 Gainsty 设计系统，字体 Outfit 采用 [SIL Open Font License 1.1](https://openfontlicense.org/)。本项目的监控数据解析、实例管理、轮询退避等逻辑为独立实现，仅视觉层借鉴 Strata 的布局与配色。
+
 ## 单文件版（推荐）
 
 `index.html` 是唯一产物：无构建、无依赖、无外部请求，双击即可在浏览器打开。
 
+- **多语言**：header 语言下拉切换 简体中文 / English（`vllmmon.lang` 持久化，缺省中文）。
+- **暗/亮主题**：◐ 按钮切换（`vllmmon.theme` 持久化，缺省暗色），图表随主题换色。
+- **精简/完整卡片**：`精简` 只显示首屏四卡（对齐 Strata 原版布局），`完整` 额外显示第二行卡片（KV 缓存、缓存命中、预填充速度、TTFT、抢占、内存、投机解码）。
 - **添加实例**：打开页面后添加实例 — `名称` + `baseURL`（如 `https://your-vllm.example.com/v1`），可选 `metricsPath`（默认 `/metrics`，如果你的端点在 `/vllm/metrics` 等路径就填它）和 `apiKey`。
 - **关于 API Key**：vLLM 的 `--api-key` 只保护 OpenAI 兼容的 API 路由（`/v1/*`），通常 `/metrics` 端点本身**不需要 key**；只有当你的网关对 metrics 也做了鉴权时才需要填 key（以 Bearer 头发送）。
 - **端点 CORS 前提（重要）**：vLLM 内置 API server **默认不开放跨源浏览器访问**（新版参数 `--allowed-origins` 默认为空；旧版叫 `--enable-cors`）。页面用浏览器跨域 fetch 读 metrics（`file://` 与 GitHub Pages 链接都是跨域），端点没开 CORS 就会报「网络不可达或 CORS 拦截」。启动 vLLM 时加：
@@ -75,6 +82,7 @@ mock 端点表（用于验证单文件版各输入场景）：
 
 ```bash
 git remote add origin <你的 GitHub 仓库地址>
-git push -u origin main
 git push -u origin feat/static-single-file
 ```
+
+push 到 `feat/static-single-file` 后 GitHub Pages 自动部署（约 1 分钟生效），线上地址：`https://george-zmli.github.io/vllm-monitor/`。
