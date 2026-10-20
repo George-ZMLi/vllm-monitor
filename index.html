@@ -479,7 +479,7 @@ function classifyFailure(input) {
   }
   const name = input.error && input.error.name;
   if (name === 'TimeoutError' || name === 'AbortError') return { code: 'timeout', msg: '超时（8s）' };
-  return { code: 'blocked', msg: '网络不可达或 CORS 拦截' };
+  return { code: 'blocked', msg: '网络不可达或 CORS 拦截 — 若为 CORS：请在 vLLM 启动参数加 --allowed-origins "*"（或本页面来源）并重启服务' };
 }
 
 // ---------- 抓取循环：链式 / 退避 / 隐藏暂停 / 无爆发 ----------

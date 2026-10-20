@@ -41,5 +41,8 @@ test('classifyFailure: 404 提示 metricsPath（Review Focus #2）/ 401 / 超时
   assert.equal(classifyFailure({ status: 502 }).msg, 'HTTP 502');
   assert.equal(classifyFailure({ error: { name: 'TimeoutError' } }).code, 'timeout');
   assert.equal(classifyFailure({ error: { name: 'AbortError' } }).code, 'timeout');
-  assert.equal(classifyFailure({ error: new Error('Failed to fetch') }).code, 'blocked');
+  const fBlocked = classifyFailure({ error: new Error('Failed to fetch') });
+  assert.equal(fBlocked.code, 'blocked');
+  assert.match(fBlocked.msg, /CORS/);
+  assert.match(fBlocked.msg, /--allowed-origins/);
 });

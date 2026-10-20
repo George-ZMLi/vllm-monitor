@@ -8,6 +8,14 @@
 
 - **添加实例**：打开页面后添加实例 — `名称` + `baseURL`（如 `https://your-vllm.example.com/v1`），可选 `metricsPath`（默认 `/metrics`，如果你的端点在 `/vllm/metrics` 等路径就填它）和 `apiKey`。
 - **关于 API Key**：vLLM 的 `--api-key` 只保护 OpenAI 兼容的 API 路由（`/v1/*`），通常 `/metrics` 端点本身**不需要 key**；只有当你的网关对 metrics 也做了鉴权时才需要填 key（以 Bearer 头发送）。
+- **端点 CORS 前提（重要）**：vLLM 内置 API server **默认不开放跨源浏览器访问**（新版参数 `--allowed-origins` 默认为空；旧版叫 `--enable-cors`）。页面用浏览器跨域 fetch 读 metrics（`file://` 与 GitHub Pages 链接都是跨域），端点没开 CORS 就会报「网络不可达或 CORS 拦截」。启动 vLLM 时加：
+
+  ```bash
+  vllm serve <model> ... --allowed-origins "*"
+  # 或只放行本页面来源：--allowed-origins https://george-zmli.github.io
+  ```
+
+  验证：`curl -i -H "Origin: https://george-zmli.github.io" <你的端点>/metrics | grep -i access-control-allow-origin` 应能看到该响应头。重启 / 换镜像后若忘记此参数，页面就会再次报 CORS 错误。
 - **手机端**：普通浏览器可正常打开（双击 / `file://`）；**微信内请使用托管链接**（X5 内核无法执行本地 .html），见下方「移动端 / 微信使用（GitHub Pages）」 — 数据只存在浏览器本地 localStorage，不上传任何服务器；页面切到后台/隐藏时自动停止轮询，省流量省电。
 
 ## 移动端 / 微信使用（GitHub Pages）
