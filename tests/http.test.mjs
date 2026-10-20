@@ -42,3 +42,32 @@ http_requests_total{handler="/h",method="GET",status="2xx"} 5
 `));
   assert.ok(deepEqual(rows.map((r) => r.method), ['GET', 'POST']));
 });
+
+test('httpStats: 负计数（畸形抓取）不渲染，total 不为负', () => {
+  const rows = httpStats(parseProm(`
+http_requests_total{handler="/h",method="GET",status="2xx"} -5
+http_requests_total{handler="/ok",method="GET",status="2xx"} 3
+`));
+  assert.ok(deepEqual(rows, [{ handler: '/ok', method: 'GET', '2xx': 3, '4xx': 0, '5xx': 0, total: 3 }]));
+});
+
+// ---------- vllmCountOf：成功提示的 vllm:* 指标计数（只数样例行，排除 # HELP / # TYPE 注释）----------
+
+const { vllmCountOf } = loadCore();
+
+test('vllmCountOf: 计数 vllm:* 样例行，注释行不计', () => {
+  assert.equal(vllmCountOf(`
+# HELP vllm:num_requests_running Number of requests currently running.
+# TYPE vllm:num_requests_running gauge
+vllm:num_requests_running{engine="0"} 2
+vllm:num_requests_waiting{engine="0"} 1
+`), 2);
+});
+
+test('vllmCountOf: 无 vllm:* 行 → 0', () => {
+  assert.equal(vllmCountOf('# HELP vllm:num_requests_running gauge\nup 1\n'), 0);
+});
+
+test('vllmCountOf: 空文本 → 0', () => {
+  assert.equal(vllmCountOf(''), 0);
+});

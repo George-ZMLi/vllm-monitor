@@ -379,7 +379,7 @@ footer {
         <div class="model" id="model-name">–</div>
       </div>
       <div class="card"><div class="label" data-i18n="requests">请求</div><div class="value" id="v-succ">–</div><div class="small" id="s-succ">等待数据…</div></div>
-      <div class="card"><div class="label" data-i18n="latency">延迟</div><div class="value" id="v-e2e">–</div><div class="small" id="s-e2e">p99 – · 端到端累计</div></div>
+      <div class="card"><div class="label" data-i18n="latency">延迟</div><div class="value" id="v-e2e">–</div><div class="small" id="s-e2e">p99 – · 累计</div></div>
       <div class="card"><div class="label" data-i18n="decodeSpeed">解码速度</div><div class="value" id="v-gen">–</div><div class="small" id="s-gen">prompt – tok/s</div></div>
     </section>
     <section class="cards extra" id="cards-extra">
@@ -588,13 +588,23 @@ function computeRates(history) {
   };
 }
 
+// 成功提示用：vllm:* 指标条数 = 以 vllm: 开头的样例行（排除 # HELP / # TYPE 注释行，注释不计入）
+function vllmCountOf(text) {
+  let n = 0;
+  for (const l of String(text).split('\n')) {
+    const i = l.indexOf(' ');
+    if (i > 0 && l.slice(0, i).startsWith('vllm:')) n++;
+  }
+  return n;
+}
+
 // 路由请求统计（只读扩展：与 buildSnapshot 同管道、同输入，聚合 http_requests_total{handler,method,status}）
 // 每 (handler,method) 一行：2xx/4xx/5xx 计数 + total（total 含未知 status）；按 total 降序，同值按 handler、method 升序
 function httpStats(samples) {
   const rows = new Map();
   for (const s of samples['http_requests_total'] || []) {
     const handler = s.labels.handler;
-    if (handler == null) continue;
+    if (handler == null || !(s.value >= 0)) continue; // 负计数 = 畸形抓取，不渲染（与 sumSeries 的 NaN 防御同口径）
     const method = s.labels.method || '-';
     const key = handler + '\u0000' + method;
     let r = rows.get(key);
@@ -769,10 +779,13 @@ function getStore(id) {
   return store.get(id);
 }
 function pushRing(arr, v) { arr.push(v); }   // 环形长度由 evict 时间窗口界定，push 不再自截断
-function evict(st, nowMs, windowMs) {        // 时间窗口环形缓冲：ts[0] < now−window 时 ts 与全部值数组同步 shift（=== 保留）
-  while (st.ts.length && st.ts[0] < nowMs - windowMs) {
-    st.ts.shift();
-    for (const k of VALUE_KEYS) st[k].shift();
+function evict(st, nowMs, windowMs) {        // 时间窗口环形缓冲：ts[0] < now−window 时 ts 与全部值数组同步截断（一次 slice，避免 k×n 次 shift）
+  let i = 0;
+  const cut = nowMs - windowMs;
+  while (i < st.ts.length && st.ts[i] < cut) i++;
+  if (i > 0) {
+    st.ts = st.ts.slice(i);
+    for (const k of VALUE_KEYS) st[k] = st[k].slice(i);
   }
 }
 function xFrac(ts, t0, t1) {                 // X 轴比例（夹 0..1）；d<=0 返回 1（空 store / t0===t1 不产生 NaN）
@@ -899,8 +912,8 @@ const I18N = {
     'mLite': '精简', 'mFull': '完整', 'mode': '卡片显示', 'interval': '轮询间隔', 'window': '数据窗口',
     'wait': '等待数据…', 'stWaiting': 'Waiting…', 'stRunning': '运行中', 'stQueued': '排队中', 'stIdle': '空闲', 'stDisconnected': '已断连',
     'liveUpdated': 'Live · 更新 {0}', 'disconnectedRetry': 'Disconnected · retrying',
-    'sSucc': '{0} running · {1} waiting', 'sE2e': 'p99 {0} · 端到端累计', 'sGen': 'prompt {0} tok/s',
-    'sE2eIdle': 'p99 – · 端到端累计', 'sGenIdle': 'prompt – tok/s',
+    'sSucc': '{0} running · {1} waiting', 'sE2e': 'p99 {0} · 累计', 'sGen': 'prompt {0} tok/s',
+    'sE2eIdle': 'p99 – · 累计', 'sGenIdle': 'prompt – tok/s',
     'fq.p50': '队列等待 p50', 'fq.p99': '队列等待 p99',
     'ft.p50': '首 token p50', 'ft.p99': '首 token p99',
     'e2e.p50': '端到端 p50', 'e2e.p99': '端到端 p99',
@@ -941,8 +954,8 @@ const I18N = {
     'mLite': 'Lite', 'mFull': 'Full', 'mode': 'Card display', 'interval': 'Poll interval', 'window': 'Data window',
     'wait': 'Waiting for data…', 'stWaiting': 'Waiting…', 'stRunning': 'Running', 'stQueued': 'Queued', 'stIdle': 'Idle', 'stDisconnected': 'Disconnected',
     'liveUpdated': 'Live · updated {0}', 'disconnectedRetry': 'Disconnected · retrying',
-    'sSucc': '{0} running · {1} waiting', 'sE2e': 'p99 {0} · cumulative e2e', 'sGen': 'prompt {0} tok/s',
-    'sE2eIdle': 'p99 – · cumulative e2e', 'sGenIdle': 'prompt – tok/s',
+    'sSucc': '{0} running · {1} waiting', 'sE2e': 'p99 {0} · cumulative', 'sGen': 'prompt {0} tok/s',
+    'sE2eIdle': 'p99 – · cumulative', 'sGenIdle': 'prompt – tok/s',
     'fq.p50': 'Queue wait p50', 'fq.p99': 'Queue wait p99',
     'ft.p50': 'First token p50', 'ft.p99': 'First token p99',
     'e2e.p50': 'End-to-end p50', 'e2e.p99': 'End-to-end p99',
@@ -1004,11 +1017,22 @@ function applyI18n() {
   selectOptionText($('mode'), { lite: T('mLite'), full: T('mFull') });
   selectOptionText($('window'), { '600000': T('w10'), '1800000': T('w30'), '3600000': T('w60') });
   if (!lastSnapOf.has(activeId) && !$('dash').hidden) {
-    // 空态：等待文案随语言刷新（有缓存快照时由 renderUp 负责）
-    $('s-succ').textContent = T('wait');
-    $('s-e2e').textContent = T('sE2eIdle');
-    $('s-gen').textContent = T('sGenIdle');
-    $('updated').textContent = T('wait');
+    // 无缓存快照（断连后已清）：按失败态/等待态分别刷文案
+    const dead = activeId && failedSet.has(activeId);
+    if (dead) {
+      setModelState({ cls: 'down', key: 'stDisconnected' });
+      $('s-succ').textContent = '—';
+      $('s-e2e').textContent = '—';
+      $('s-gen').textContent = '—';
+      $('updated').textContent = T('disconnectedRetry');
+      $('updated').className = 'dead';
+    } else {
+      $('s-succ').textContent = T('wait');
+      $('s-e2e').textContent = T('sE2eIdle');
+      $('s-gen').textContent = T('sGenIdle');
+      $('updated').textContent = T('wait');
+      $('updated').className = '';
+    }
   } else if (lastSnapOf.has(activeId)) {
     renderFacts(lastSnapOf.get(activeId));
   }
@@ -1021,13 +1045,16 @@ function setLang(l) {
   applyI18n();
   $('lang').value = l;
   if (activeId) {
-    // 有缓存快照 → 重放一次 renderUp，刷新所有动态文案（sSucc/sE2e/updated/foot/facts）
+    // 有缓存快照 → 重放一次 renderUp，刷新所有动态文案（sSucc/sE2e/updated/foot/facts）；断连无快照 → 脚部清空（renderDown 口径）
     const snap = lastSnapOf.get(activeId);
     if (snap) renderUp(snap);
-    else $('foot').textContent = footText();
+    else $('foot').textContent = '';
   }
   CHARTS.forEach((c) => { draw(c); legend(c); });
 }
+
+// 图表主题色缓存：grid/axis 只随 data-theme 变化，draw 中按需失效
+const chartColors = { theme: null, grid: '', axis: '' };
 
 // Strata token 四色（accent/info/warn/danger），双主题下均可读
 const CHARTS = [
@@ -1124,16 +1151,21 @@ function draw(c) {
   // 双轴独立动态量程：各轴天花板 = 该轴数据最大值 × 1.15，随数据自动伸缩（超出即抬高，尖峰滚出窗口即回落）
   const axMax = { left: 0, right: 0 };
   for (const s of series) for (const v of s.data) if (v != null && isFinite(v)) axMax[s.axis === 'right' ? 'right' : 'left'] = Math.max(axMax[s.axis === 'right' ? 'right' : 'left'], v);
-  const leftYMax = c.fixed || Math.max(axMax.left * 1.15, 0.5);
-  const rightYMax = hasRight ? Math.max(axMax.right * 1.15, 0.5) : 0;
+  const axFloor = c.unit === 's' ? 0.1 : 0.5; // 轴下限随量级：秒级图用 0.1s（低延迟场景曲线不贴底），计数量级用 0.5
+  const leftYMax = c.fixed || Math.max(axMax.left * 1.15, axFloor);
+  const rightYMax = hasRight ? Math.max(axMax.right * 1.15, axFloor) : 0;
   const YL = (v) => padT + ph * (1 - Math.min(Math.max(v / leftYMax, 0), 1));
   const YR = (v) => padT + ph * (1 - Math.min(Math.max(v / rightYMax, 0), 1));
   const Y = (s, v) => (s.axis === 'right' ? YR(v) : YL(v));
   ctx.font = '10px ui-monospace, SFMono-Regular, Menlo, monospace';
-  // 网格/轴色随主题：每次绘制现读 CSS 变量（暗/亮切换即时生效）
-  const cs = getComputedStyle(document.documentElement);
-  const gridColor = cs.getPropertyValue('--chart-grid').trim();
-  const axisColor = cs.getPropertyValue('--chart-axis').trim();
+  // 网格/轴色随主题：CSS 变量缓存（getComputedStyle 只随主题切换失效，避免每 tick ×4 图重复读）
+  if (!chartColors.theme || chartColors.theme !== document.documentElement.dataset.theme) {
+    const cs = getComputedStyle(document.documentElement);
+    chartColors.theme = document.documentElement.dataset.theme;
+    chartColors.grid = cs.getPropertyValue('--chart-grid').trim();
+    chartColors.axis = cs.getPropertyValue('--chart-axis').trim();
+  }
+  const gridColor = chartColors.grid, axisColor = chartColors.axis;
   ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
   for (let i = 0; i <= 4; i++) {
     const y = padT + ph * (i / 4);
@@ -1358,7 +1390,7 @@ function renderUp(snap) {
 
 function renderDown() {
   document.body.classList.add('stale');
-  setModelState({ cls: 'down', label: 'Disconnected' });
+  setModelState({ cls: 'down', key: 'stDisconnected' });
   $('s-succ').textContent = '—';
   $('s-e2e').textContent = '—';
   $('s-gen').textContent = '—';
@@ -1388,6 +1420,7 @@ function renderSnapshot(targetId, snap) {
   }
   const dot = dotEls.get(targetId);
   if (dot) dot.classList.toggle('down', !snap.up);
+  if (!snap.up && lastSnapOf.has(targetId)) lastSnapOf.delete(targetId); // 断连：清缓存快照，切语言/切实例重放时不得把断连态渲染成旧成功数据
   if (targetId === activeId) { if (snap.up) renderUp(snap); else renderDown(); }
 }
 
@@ -1402,7 +1435,7 @@ function testConnection(t) {
         ok: true,
         model: snap.model, // 兼容旧字段
         models: snap.models,
-        vllmCount: text.split('\n').filter((l) => l.includes('vllm:')).length,
+        vllmCount: vllmCountOf(text),
       };
     })
     .catch((err) => {
@@ -1541,6 +1574,7 @@ function setTheme(t) {
 
 function setActive(id) {
   activeId = id;
+  selectedRoute = null; // 跨实例不保留选中路由：新实例首刷落到其首行（handler 同名的跨实例粘滞已消除）
   try {
     if (storageRef) {
       if (id) storageRef.setItem(ACTIVE_KEY, id);
@@ -1782,7 +1816,7 @@ function boot() {
 }
 
 // ---------- Node 测试钩子（固定尾部，勿动）----------
-if (typeof module !== 'undefined' && module.exports) module.exports = { parseLabels, parseProm, sumSeries, histogram, percentile, HISTS, buildSnapshot, computeRates, httpStats, metricsUrlOf, makeTarget, loadTargets, saveTargets, classifyFailure, nextDelayMs, intervalFor, createPoller, VALUE_KEYS, evict, xFrac, pickTickStep, decimIdx, modelState, factsFromSnap, T };
+if (typeof module !== 'undefined' && module.exports) module.exports = { parseLabels, parseProm, sumSeries, histogram, percentile, HISTS, buildSnapshot, computeRates, httpStats, vllmCountOf, metricsUrlOf, makeTarget, loadTargets, saveTargets, classifyFailure, nextDelayMs, intervalFor, createPoller, VALUE_KEYS, evict, xFrac, pickTickStep, decimIdx, modelState, factsFromSnap, T };
 if (typeof document !== 'undefined' && typeof boot === 'function' && document.getElementById) boot();
 </script>
 </body>
