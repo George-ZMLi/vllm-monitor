@@ -1004,10 +1004,12 @@ function applyI18n() {
   document.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'en';
   for (const el of document.querySelectorAll('[data-i18n]')) {
     const s = T(el.dataset.i18n);
-    if (el.tagName === 'LABEL') { // 标签文字在 input 前，只换 text node（不动子元素）
-      el.textContent = s + ' ';
-      const inp = el.querySelector('input');
-      if (inp) el.appendChild(inp);
+    if (el.tagName === 'LABEL') {
+      // label 内嵌 input/select：只替换首个 text node，绝不触碰子元素。
+      // （旧实现 el.textContent = … 会销毁 input —— 弹窗注入后调 applyI18n 时输入框消失，已修复）
+      const first = el.firstChild;
+      if (first && first.nodeType === 3) first.nodeValue = s + ' ';
+      else el.insertBefore(document.createTextNode(s + ' '), el.firstChild);
     } else {
       el.innerHTML = s;
     }
