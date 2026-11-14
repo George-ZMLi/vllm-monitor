@@ -5,7 +5,26 @@ nInfer（capy-flash，`ninfer-serve`）只暴露 OpenAI 兼容 API 和 `/health`
 `ninfer-bridge.mjs` 在本机旁路解决：解析 nInfer 日志，以 **vLLM 兼容的指标命名**（`vllm:*`）
 输出 Prometheus 文本，挂在独立端口 **50218** 上。面板代码零改动。
 
-## 使用
+## 入口布局（推荐：本地代理，Cloudflare/面板零改动）
+
+`ninfer-proxy.mjs` 把桥"藏"在推理端口后面：**50217 = 代理**，
+`/metrics` → 桥（50218），其余 → nInfer（50219）。
+这样 Cloudflare tunnel、监控面板、所有客户端的 URL **一个字都不用改**：
+
+    隧道/面板 → https://<原域名>/v1        → 50217 代理 → nInfer 50219
+    隧道/面板 → https://<原域名>/metrics   → 50217 代理 → 桥   50218
+
+代理零依赖、流式透传（SSE/大 body 不缓冲）、Authorization 原样透传、
+上游不可达时返回 502 JSON。测试：`node --test tests/proxy.test.mjs`。
+
+迁移（一次性，需短暂停 nInfer）：
+
+    bash /home/george/capy-flash/switch-to-proxy.sh
+
+`serve-27b.sh` 已改为：先拉起代理（50217 空闲时），再以 50219 启动 nInfer；
+之后每次登录/重启都会自动按此布局恢复。
+
+## 直接连桥（无代理时）
 
 在面板里新增（或修改）实例，baseURL 指向桥（API Key 不变）：
 
