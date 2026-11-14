@@ -15,4 +15,9 @@ export NINFER_URL="${NINFER_URL:-http://127.0.0.1:50217}"
 export MODEL_NAME="${MODEL_NAME:-model}"
 export API_KEY_FILE="${API_KEY_FILE:-/home/george/Project/vllm/api-key.txt}"
 export ALLOWED_ORIGINS="${ALLOWED_ORIGINS:-https://george-zmli.github.io}"
+# 已有一个桥在跑（例如手动启动过，本次是登录自启动）→ 不重复拉起
+if curl -s -m 2 -o /dev/null "http://127.0.0.1:${PORT}/health"; then
+  echo "ninfer-bridge: port ${PORT} already serving; skipping duplicate start"
+  exit 0
+fi
 exec node ninfer-bridge.mjs
