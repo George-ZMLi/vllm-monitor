@@ -270,6 +270,11 @@ footer {
   color: var(--st-ink-muted); font-size: 14px; line-height: 1; flex: none;
 }
 .x:hover { background: var(--st-danger-tint); color: var(--st-danger-text); border-color: transparent; }
+.pen {
+  width: 22px; height: 22px; border-radius: 6px; border: 0; background: transparent;
+  color: var(--st-ink-muted); font-size: 13px; line-height: 1; flex: none;
+}
+.pen:hover { background: var(--st-line); color: var(--st-ink); }
 
 /* ---------- 添加实例弹窗 ---------- */
 .mask {
@@ -922,11 +927,11 @@ const I18N = {
     'foot': '数据仅存于本浏览器 · 实例 {0} · 每 {1}s · 窗口 {2} 分钟',
     'welcome': '还没有监控实例', 'welcomeSub': '添加一个 vLLM 实例，即可在此实时查看请求、KV 缓存、吞吐与延迟。', 'welcomeAdd': '＋ 添加监控实例',
     'drawerTitle': '实例', 'drawerAdd': '＋ 添加实例',
-    'switchTo': '切换到此实例', 'disable': '停用', 'enable': '启用', 'deleteInst': '删除实例', 'optDisabled': '（已停用）',
+    'switchTo': '切换到此实例', 'disable': '停用', 'enable': '启用', 'editInst': '编辑实例', 'deleteInst': '删除实例', 'optDisabled': '（已停用）',
     'deleteConfirm': '删除实例 “{0}”？',
     'bannerRetry': '自动退避重试中', 'bannerCors': '网络不可达或 CORS 拦截 · vLLM 服务端加 --allowed-origins http://<本页地址> 后可直连', 'bannerAuth': '鉴权失败 · 检查 API Key',
     'bannerLine': '实例 “{0}” {1}',
-    'modalTitle': '添加监控实例', 'fName': '名称', 'fNamePh': '实例名称',
+    'modalTitle': '添加监控实例', 'modalEditTitle': '编辑监控实例', 'save': '保存', 'chkEnableEdit': '编辑后启用监控', 'fName': '名称', 'fNamePh': '实例名称',
     'fPath': 'metrics 路径（可选）', 'fPathPh': '/vllm/metrics', 'hintAuto': '留空 = 自动 origin+/metrics',
     'fKey': 'API Key（可选）', 'fKeyPh': 'sk-…（以 Bearer 头随请求发送）', 'hintLocal': '仅存本机',
     'chkEnable': '添加后启用监控', 'cancel': '取消', 'add': '添加',
@@ -964,11 +969,11 @@ const I18N = {
     'foot': 'Data stays in this browser · Instance {0} · Every {1}s · Window {2} min',
     'welcome': 'No instances yet', 'welcomeSub': 'Add a vLLM instance to watch requests, KV cache, throughput and latency in real time.', 'welcomeAdd': '+ Add instance',
     'drawerTitle': 'Instances', 'drawerAdd': '+ Add instance',
-    'switchTo': 'Switch to this instance', 'disable': 'Disable', 'enable': 'Enable', 'deleteInst': 'Remove instance', 'optDisabled': ' (disabled)',
+    'switchTo': 'Switch to this instance', 'disable': 'Disable', 'enable': 'Enable', 'editInst': 'Edit instance', 'deleteInst': 'Remove instance', 'optDisabled': ' (disabled)',
     'deleteConfirm': 'Remove instance "{0}"?',
     'bannerRetry': 'auto-backoff retry in progress', 'bannerCors': 'network unreachable or CORS blocked · add --allowed-origins http://<page origin> to the vLLM server to connect directly', 'bannerAuth': 'auth failed · check API Key',
     'bannerLine': 'Instance "{0}" {1}',
-    'modalTitle': 'Add instance', 'fName': 'Name', 'fNamePh': 'Instance name',
+    'modalTitle': 'Add instance', 'modalEditTitle': 'Edit instance', 'save': 'Save', 'chkEnableEdit': 'Enable monitoring after saving', 'fName': 'Name', 'fNamePh': 'Instance name',
     'fPath': 'metrics path (optional)', 'fPathPh': '/vllm/metrics', 'hintAuto': 'empty = auto origin+/metrics',
     'fKey': 'API Key (optional)', 'fKeyPh': 'sk-… (sent as Bearer header)', 'hintLocal': 'stored locally only',
     'chkEnable': 'Enable monitoring after adding', 'cancel': 'Cancel', 'add': 'Add',
@@ -1545,6 +1550,7 @@ function renderInstances() {
         <div class="url">${esc(metricsUrlOf(t.baseURL, t.metricsPath))}</div>
       </div>
       <button class="tg${t.enabled ? ' on' : ''}" data-act="toggle" title="${esc(T(t.enabled ? 'disable' : 'enable'))}" type="button"></button>
+      <button class="pen" data-act="edit" title="${esc(T('editInst'))}" type="button">✎</button>
       <button class="x" data-act="remove" title="${esc(T('deleteInst'))}" type="button">×</button>
     </div>`;
   }).join('');
@@ -1604,32 +1610,37 @@ function toggleTarget(t) {
   applyTargets(list);
 }
 
-// 添加实例弹窗（挂载到 #modal-root）
-function openAddModal() {
+// 添加/编辑实例弹窗（挂载到 #modal-root；传入 editT → 编辑模式：预填字段 + 保留 id）
+let editingTarget = null;
+function openAddModal(editT = null) {
   const root = $('modal-root');
   if (root.querySelector('#modal')) return;
+  editingTarget = editT;
+  const isEdit = !!editT;
+  const v = (s) => (isEdit ? ` value="${esc(s)}"` : '');
   root.innerHTML = `
   <div class="mask" id="modal">
     <div class="modal">
-      <h3 data-i18n="modalTitle">添加监控实例</h3>
-      <label data-i18n="fName">名称<input id="f-name" data-i18n-ph="fNamePh" placeholder="实例名称" autocomplete="off"></label>
-      <label>Base URL<input id="f-base" placeholder="https://your-vllm.example.com/v1" autocomplete="off" spellcheck="false"></label>
-      <label data-i18n="fPath">metrics 路径（可选）<input id="f-path" data-i18n-ph="fPathPh" placeholder="/vllm/metrics" autocomplete="off" spellcheck="false"></label>
+      <h3 data-i18n="${isEdit ? 'modalEditTitle' : 'modalTitle'}">${isEdit ? '编辑监控实例' : '添加监控实例'}</h3>
+      <label data-i18n="fName">名称<input id="f-name" data-i18n-ph="fNamePh" placeholder="实例名称" autocomplete="off"${v(editT.name)}></label>
+      <label>Base URL<input id="f-base" placeholder="https://your-vllm.example.com/v1" autocomplete="off" spellcheck="false"${v(editT.baseURL)}></label>
+      <label data-i18n="fPath">metrics 路径（可选）<input id="f-path" data-i18n-ph="fPathPh" placeholder="/vllm/metrics" autocomplete="off" spellcheck="false"${v(editT.metricsPath)}></label>
       <p class="hint" data-i18n="hintAuto">留空 = 自动 origin+/metrics</p>
-      <label data-i18n="fKey">API Key（可选）<input id="f-key" type="password" data-i18n-ph="fKeyPh" placeholder="sk-…（以 Bearer 头随请求发送）" autocomplete="off"></label>
+      <label data-i18n="fKey">API Key（可选）<input id="f-key" type="password" data-i18n-ph="fKeyPh" placeholder="sk-…（以 Bearer 头随请求发送）" autocomplete="off"${v(editT.apiKey)}></label>
       <p class="hint" data-i18n="hintLocal">仅存本机</p>
-      <label class="chk"><input type="checkbox" id="f-enabled" checked><span data-i18n="chkEnable">添加后启用监控</span></label>
+      <label class="chk"><input type="checkbox" id="f-enabled"${isEdit && !editT.enabled ? '' : ' checked'}><span data-i18n="${isEdit ? 'chkEnableEdit' : 'chkEnable'}">${isEdit ? '编辑后启用监控' : '添加后启用监控'}</span></label>
       <div class="mrow">
         <button class="btn ghost" id="f-cancel" type="button" data-i18n="cancel">取消</button>
-        <button class="btn primary" id="f-add" type="button" data-i18n="add">添加</button>
+        <button class="btn primary" id="f-add" type="button" data-i18n="${isEdit ? 'save' : 'add'}">${isEdit ? '保存' : '添加'}</button>
       </div>
       <p class="merr" id="f-msg" hidden></p>
     </div>
   </div>`;
+  applyI18n(); // 弹窗为动态注入：立即按当前语言翻译标题/按钮/占位符
   const q = (sel) => root.querySelector(sel);
   q('#f-cancel').addEventListener('click', closeModal);
   q('#modal').addEventListener('click', (e) => { if (e.target.id === 'modal') closeModal(); });
-  q('#f-add').addEventListener('click', addInstance);
+  q('#f-add').addEventListener('click', isEdit ? editInstance : addInstance);
   q('#f-name').focus();
 }
 
@@ -1674,6 +1685,44 @@ async function addInstance() {
   msg.textContent = T('connected', [modelLabel(r.models), r.vllmCount]);
   msg.className = 'merr ok';
   setTimeout(closeModal, 700); // 成功提示短暂可见后自动关闭
+}
+
+// 保存编辑：makeTarget 保留 input.id → 历史曲线/activeId 连续，仅字段更新
+async function editInstance() {
+  const root = $('modal-root');
+  const q = (sel) => root.querySelector(sel);
+  const name = q('#f-name').value.trim();
+  const baseURL = q('#f-base').value.trim();
+  const metricsPath = q('#f-path').value.trim();
+  const apiKey = q('#f-key').value.trim();
+  const enabled = q('#f-enabled').checked;
+  const msg = q('#f-msg');
+  const btn = q('#f-add');
+  msg.hidden = true;
+  let t;
+  try { t = makeTarget({ ...editingTarget, name, baseURL, metricsPath, apiKey, enabled }); }
+  catch (e) { msg.textContent = e.message || T('invalid'); msg.className = 'merr'; msg.hidden = false; return; }
+
+  // 保存前自动跑一次测试连接（与添加同口径）
+  btn.disabled = true;
+  msg.className = 'merr dim';
+  msg.textContent = T('testing');
+  msg.hidden = false;
+  const r = await testConnection(t);
+  if (root.querySelector('#modal') == null) return; // 测试期间弹窗已被关闭
+  if (!r.ok) {
+    msg.textContent = r.msg;
+    msg.className = 'merr' + (r.level === 'warn' ? ' warn' : '');
+    btn.disabled = false;
+    return;
+  }
+  const list = targets.map((x) => (x.id === t.id ? t : x));
+  saveTargets(storageRef, list);
+  applyTargets(list);
+  btn.disabled = false;
+  msg.textContent = T('connected', [modelLabel(r.models), r.vllmCount]);
+  msg.className = 'merr ok';
+  setTimeout(closeModal, 700);
 }
 
 // 实例列表整体重建：重建实例切换 UI + 重启 poller
@@ -1789,6 +1838,17 @@ function boot() {
   $('drawer-close').addEventListener('click', closeDrawer);
   $('drawer-mask').addEventListener('click', closeDrawer);
   $('drawer-add').addEventListener('click', () => { closeDrawer(); openAddModal(); });
+  // 抽屉行操作（按钮由 renderInstances 动态生成 → 事件委托）：启用/停用、编辑、删除
+  $('drawer-list').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-act]');
+    if (!btn) return;
+    const row = btn.closest('.drow');
+    const t = row && targets.find((x) => x.id === row.dataset.id);
+    if (!t) return;
+    if (btn.dataset.act === 'toggle') toggleTarget(t);
+    else if (btn.dataset.act === 'edit') openAddModal(t);
+    else if (btn.dataset.act === 'remove') removeTarget(t);
+  });
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('drawer').hidden) closeDrawer(); });
   $('instances').addEventListener('change', () => { const v = $('instances').value; if (v) setActive(v); });
   // 路由表行点击：选中高亮（右侧详情为全局口径，不随选行变化）

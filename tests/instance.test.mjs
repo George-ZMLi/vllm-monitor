@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { loadCore, test, deepEqual } from './helpers.mjs';
 
-const { metricsUrlOf, makeTarget, loadTargets, saveTargets, classifyFailure } = loadCore();
+const { metricsUrlOf, makeTarget, loadTargets, saveTargets, classifyFailure, T } = loadCore();
 
 test('metricsUrlOf: 自动 /metrics 与显式前缀路径', () => {
   assert.equal(metricsUrlOf('https://h.example.com/v1'), 'https://h.example.com/metrics');
@@ -45,4 +45,29 @@ test('classifyFailure: 404 提示 metricsPath（Review Focus #2）/ 401 / 超时
   assert.equal(fBlocked.code, 'blocked');
   assert.match(fBlocked.msg, /CORS/);
   assert.match(fBlocked.msg, /--allowed-origins/);
+});
+
+test('makeTarget: 传入 id → 保留（编辑流程依赖：id 不变则历史/activeId 连续）', () => {
+  const t = makeTarget({ id: 'keep-1', name: 'renamed', baseURL: 'https://a.example.com/v1', metricsPath: '/m', apiKey: 'k', enabled: false });
+  assert.equal(t.id, 'keep-1');
+  assert.equal(t.name, 'renamed');
+  assert.equal(t.metricsPath, '/m');
+  assert.equal(t.apiKey, 'k');
+  assert.equal(t.enabled, false);
+});
+
+test('i18n: 编辑/删除相关 key 中英齐全（实例管理 UI）', () => {
+  T.__setLang('zh');
+  assert.equal(T('editInst'), '编辑实例');
+  assert.equal(T('modalEditTitle'), '编辑监控实例');
+  assert.equal(T('save'), '保存');
+  assert.equal(T('chkEnableEdit'), '编辑后启用监控');
+  assert.equal(T('deleteInst'), '删除实例');
+  T.__setLang('en');
+  assert.equal(T('editInst'), 'Edit instance');
+  assert.equal(T('modalEditTitle'), 'Edit instance');
+  assert.equal(T('save'), 'Save');
+  assert.equal(T('chkEnableEdit'), 'Enable monitoring after saving');
+  assert.equal(T('deleteInst'), 'Remove instance');
+  T.__setLang('zh'); // 还原
 });
