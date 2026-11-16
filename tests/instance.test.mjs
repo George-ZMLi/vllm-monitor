@@ -13,8 +13,17 @@ test('makeTarget: 默认值与校验', () => {
   assert.equal(t.apiKey, '');
   assert.equal(t.enabled, true);
   assert.ok(typeof t.id === 'string' && t.id.length > 1);
-  assert.throws(() => makeTarget({ name: '', baseURL: 'https://x.example.com/v1' }));
   assert.throws(() => makeTarget({ name: 'a', baseURL: 'ftp://x.example.com' }));
+  assert.throws(() => makeTarget({ name: 'a', baseURL: 'not a url' }));
+});
+test('makeTarget: 名称留空时取域名（不得因此挡住添加实例）', () => {
+  const t = makeTarget({ name: '', baseURL: 'http://192.168.1.9:50218/v1' });
+  assert.equal(t.name, '192.168.1.9');
+  assert.ok(t.id.startsWith('192.168.1.9-'));
+  // 从旧配置载入的条目也允许无名
+  const storage = { d: {}, getItem(k) { return this.d[k] ?? null; }, setItem(k, v) { this.d[k] = String(v); } };
+  storage.setItem('vllmmon.targets', JSON.stringify([{ baseURL: 'http://192.168.1.9:50218/v1' }]));
+  assert.equal(loadTargets(storage).targets[0].name, '192.168.1.9');
 });
 test('loadTargets: 空 / 坏 JSON / 抛异常的 storage（file:// 禁 localStorage，Review Focus #1）', () => {
   const ok = { d: {}, getItem(k) { return this.d[k] ?? null; }, setItem(k, v) { this.d[k] = String(v); } };
@@ -46,7 +55,6 @@ test('classifyFailure: 404 提示 metricsPath（Review Focus #2）/ 401 / 超时
   assert.match(fBlocked.msg, /CORS/);
   assert.match(fBlocked.msg, /--allowed-origins/);
 });
-
 test('makeTarget: 传入 id → 保留（编辑流程依赖：id 不变则历史/activeId 连续）', () => {
   const t = makeTarget({ id: 'keep-1', name: 'renamed', baseURL: 'https://a.example.com/v1', metricsPath: '/m', apiKey: 'k', enabled: false });
   assert.equal(t.id, 'keep-1');
@@ -70,4 +78,12 @@ test('i18n: 编辑/删除相关 key 中英齐全（实例管理 UI）', () => {
   assert.equal(T('chkEnableEdit'), 'Enable monitoring after saving');
   assert.equal(T('deleteInst'), 'Remove instance');
   T.__setLang('zh'); // 还原
+});
+
+test('classifyFailure: HTTPS 页面抓 HTTP 端点 → mixed（与 CORS 区分）', () => {
+  const f = classifyFailure({ mixed: true });
+  assert.equal(f.code, 'mixed');
+  assert.match(f.msg, /HTTPS|混合|mixed/);
+  assert.equal(classifyFailure({ error: { mixed: true } }).code, 'mixed');
+  assert.equal(classifyFailure({ status: 200 }).code, 'ok');
 });

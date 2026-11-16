@@ -149,6 +149,8 @@ body.mode-full .cards.extra { display: grid; }
   font: 12px var(--st-font-mono); overflow-wrap: anywhere;
   margin-top: 4px; color: var(--st-ink-muted);
 }
+#model-extra { margin-top: 6px; font: 11px var(--st-font-mono); overflow-wrap: anywhere; }
+#model-extra.stale { color: var(--st-warn-text); }
 .dot { display: inline-block; width: 9px; height: 9px; border-radius: 100%; background: var(--st-ink-muted); margin-right: 9px; }
 .value.run .dot { background: var(--st-accent); box-shadow: 0 0 0 4px var(--st-accent-tint); }
 .value.wait .dot { background: var(--st-warn); box-shadow: 0 0 0 4px var(--st-warn-tint); }
@@ -382,6 +384,7 @@ footer {
         <div class="label" data-i18n="model">模型</div>
         <div class="value idle" id="model-state"><span class="dot"></span><span id="model-label">等待中…</span></div>
         <div class="model" id="model-name">–</div>
+        <div class="small" id="model-extra" hidden></div>
       </div>
       <div class="card"><div class="label" data-i18n="requests">请求</div><div class="value" id="v-succ">–</div><div class="small" id="s-succ">等待数据…</div></div>
       <div class="card"><div class="label" data-i18n="latency">延迟</div><div class="value" id="v-e2e">–</div><div class="small" id="s-e2e">p99 – · 累计</div></div>
@@ -561,10 +564,26 @@ function buildSnapshot(samples) {
   const drafts = sumSeries(samples, 'vllm:spec_decode_num_draft_tokens_total');
   const accepted = sumSeries(samples, 'vllm:spec_decode_num_accepted_tokens_total');
   const models = distinctLabel(samples, 'vllm:num_requests_running', 'model_name');
+  // nInfer（ninfer-bridge）在 vllm:* 之外还输出 ninfer_* 诊断指标。
+  // 识别到就带进快照，让页面能显示 nInfer 的在途数 / batch / 主机占用 / 日志新鲜度。
+  const nifOne = (name) => {
+    const a = samples[name];
+    return a && a.length && isFinite(a[0].value) ? a[0].value : null;
+  };
+  const ninfer = (samples['ninfer_up'] || samples['ninfer_requests_in_flight'] || samples['ninfer_last_log_age_seconds'])
+    ? {
+        up: nifOne('ninfer_up'),
+        inFlight: nifOne('ninfer_requests_in_flight'),
+        batch: nifOne('ninfer_batch_size'),
+        hostBusyPct: nifOne('ninfer_host_busy_percent'),
+        lastLogAgeS: nifOne('ninfer_last_log_age_seconds'),
+      }
+    : null;
   return {
     model: models[0] ?? null, // 兼容旧字段；全量列表见 models
     models,
     engines: distinctLabel(samples, 'vllm:num_requests_running', 'engine'),
+    ninfer,
     gauges: g,
     successByReason,
     successTotal,
@@ -631,13 +650,13 @@ function metricsUrlOf(baseURL, metricsPath) {
 }
 
 function makeTarget(input) {
-  const name = (input.name || '').trim();
-  if (!name) throw new Error('name 不能为空');
   let u;
   try { u = new URL(input.baseURL); } catch { throw new Error('baseURL 无效'); }
   if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new Error('baseURL 必须是 http(s)');
+  // 名称可省略：留空时取域名（与旧单文件版一致），避免因此把实例挡在门外
+  const name = (input.name || '').trim() || u.hostname;
   return {
-    id: input.id || name + '-' + Date.now().toString(36),
+    id: input.id || name + '-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
     name,
     baseURL: u.href,
     metricsPath: input.metricsPath || '',
@@ -666,7 +685,24 @@ function saveTargets(storage, targets) {
   try { storage.setItem(TARGETS_KEY, JSON.stringify(targets)); return true; } catch { return false; }
 }
 
+// HTTPS 页面（GitHub Pages）直连 http:// 端点会被浏览器按混合内容拦截，fetch 直接抛错。
+// 这类失败与 CORS 不同：加 --allowed-origins 也没用，必须换 HTTPS 地址（如反向代理/隧道）。
+function mixedContentBlocked(url) {
+  try {
+    if (typeof window === 'undefined' || !window.location || window.location.protocol !== 'https:') return false;
+    const u = new URL(url);
+    if (u.protocol !== 'http:') return false;
+    // 浏览器把 localhost / 127.0.0.1 / ::1 视为可信来源，不受混合内容拦截
+    if (u.hostname === 'localhost' || u.hostname === '127.0.0.1' || u.hostname === '[::1]') return false;
+    return true;
+  } catch { return false; }
+}
+
 function classifyFailure(input) {
+  input = input || {};
+  if (input.mixed || (input.error && input.error.mixed)) {
+    return { code: 'mixed', msg: 'HTTPS 页面不能直连 HTTP 端点（浏览器混合内容拦截）：请用 HTTPS 地址访问 metrics（如反向代理/Cloudflare 隧道），或在本地打开本页' };
+  }
   if (input.status != null) {
     if (input.status === 200) return { code: 'ok', msg: '' };
     if (input.status === 404) return { code: 'http', msg: 'HTTP 404：端点不存在 — 请在 metricsPath 指定实际路径（如 /vllm/metrics）' };
@@ -931,11 +967,15 @@ const I18N = {
     'deleteConfirm': '删除实例 “{0}”？',
     'bannerRetry': '自动退避重试中', 'bannerCors': '网络不可达或 CORS 拦截 · vLLM 服务端加 --allowed-origins http://<本页地址> 后可直连', 'bannerAuth': '鉴权失败 · 检查 API Key',
     'bannerLine': '实例 “{0}” {1}',
-    'modalTitle': '添加监控实例', 'modalEditTitle': '编辑监控实例', 'save': '保存', 'chkEnableEdit': '编辑后启用监控', 'fName': '名称', 'fNamePh': '实例名称',
+    'bannerMixed': 'HTTPS 页面无法直连 HTTP 端点（混合内容拦截）· 请用 HTTPS 反向代理/隧道提供 metrics，或在本地打开本页',
+    'modalTitle': '添加监控实例', 'modalEditTitle': '编辑监控实例', 'save': '保存', 'chkEnableEdit': '编辑后启用监控', 'fName': '名称（可留空）', 'fNamePh': '留空取域名',
     'fPath': 'metrics 路径（可选）', 'fPathPh': '/vllm/metrics', 'hintAuto': '留空 = 自动 origin+/metrics',
     'fKey': 'API Key（可选）', 'fKeyPh': 'sk-…（以 Bearer 头随请求发送）', 'hintLocal': '仅存本机',
-    'chkEnable': '添加后启用监控', 'cancel': '取消', 'add': '添加',
-    'testing': '正在测试连接…', 'connected': '连接成功：模型 {0}，含 vllm:* 指标 {1} 条', 'invalid': '输入无效',
+    'hintNinfer': 'nInfer 用户：填桥地址 http://主机:50218/v1 与 API Key；HTTPS 页面须经 HTTPS 隧道访问该端点',
+    'chkEnable': '添加后启用监控', 'cancel': '取消', 'add': '添加', 'addAnyway': '仍然添加', 'saveAnyway': '仍然保存',
+    'testing': '正在测试连接…', 'connected': '连接成功：模型 {0}，含 vllm:* 指标 {1} 条',
+    'addedOffline': '已添加（连接未验证，页面会自动重试）', 'savedOffline': '已保存（连接未验证，页面会自动重试）', 'invalid': '输入无效',
+    'nIfInfo': 'nInfer · 在途 {0} · batch {1} · 主机 {2}% · 日志 {3} 前',
     'toastNoStorage': '本地设置无法保存，刷新后丢失',
   },
   en: {
@@ -973,11 +1013,15 @@ const I18N = {
     'deleteConfirm': 'Remove instance "{0}"?',
     'bannerRetry': 'auto-backoff retry in progress', 'bannerCors': 'network unreachable or CORS blocked · add --allowed-origins http://<page origin> to the vLLM server to connect directly', 'bannerAuth': 'auth failed · check API Key',
     'bannerLine': 'Instance "{0}" {1}',
-    'modalTitle': 'Add instance', 'modalEditTitle': 'Edit instance', 'save': 'Save', 'chkEnableEdit': 'Enable monitoring after saving', 'fName': 'Name', 'fNamePh': 'Instance name',
+    'bannerMixed': 'HTTPS page cannot reach an HTTP endpoint (mixed content blocked) · serve metrics over HTTPS (reverse proxy/tunnel), or open this page locally',
+    'modalTitle': 'Add instance', 'modalEditTitle': 'Edit instance', 'save': 'Save', 'chkEnableEdit': 'Enable monitoring after saving', 'fName': 'Name (optional)', 'fNamePh': 'defaults to hostname',
     'fPath': 'metrics path (optional)', 'fPathPh': '/vllm/metrics', 'hintAuto': 'empty = auto origin+/metrics',
     'fKey': 'API Key (optional)', 'fKeyPh': 'sk-… (sent as Bearer header)', 'hintLocal': 'stored locally only',
-    'chkEnable': 'Enable monitoring after adding', 'cancel': 'Cancel', 'add': 'Add',
-    'testing': 'Testing connection…', 'connected': 'Connected: model {0}, {1} vllm:* metrics', 'invalid': 'Invalid input',
+    'hintNinfer': 'nInfer: use the bridge http://host:50218/v1 and its API Key; an HTTPS page needs an HTTPS tunnel to reach it',
+    'chkEnable': 'Enable monitoring after adding', 'cancel': 'Cancel', 'add': 'Add', 'addAnyway': 'Add anyway', 'saveAnyway': 'Save anyway',
+    'testing': 'Testing connection…', 'connected': 'Connected: model {0}, {1} vllm:* metrics',
+    'addedOffline': 'Added (connection not verified; the page will keep retrying)', 'savedOffline': 'Saved (connection not verified; the page will keep retrying)', 'invalid': 'Invalid input',
+    'nIfInfo': 'nInfer · in-flight {0} · batch {1} · host {2}% · log {3} ago',
     'toastNoStorage': 'Local settings cannot be saved; they will be lost on refresh',
   },
 };
@@ -1265,6 +1309,7 @@ function refreshActive() {
   resetCardAnims();
   setModelState({ cls: 'idle', key: 'stWaiting' });
   $('model-name').textContent = modelLabel(modelsOf.get(activeId) || []);
+  $('model-extra').hidden = true;
   $('s-succ').textContent = T('wait');
   $('s-e2e').textContent = T('sE2eIdle');
   $('s-gen').textContent = T('sGenIdle');
@@ -1280,6 +1325,15 @@ function modelLabel(models) {
   const ms = models || [];
   if (ms.length === 0) return '–';
   return ms.length <= 2 ? ms.join(' · ') : ms.slice(0, 2).join(' · ') + ' +' + (ms.length - 2);
+}
+
+// 日志年龄（秒）→ 紧凑中文/英文时长：桥读到旧日志源时用于提示数据已过期
+function fmtAge(s) {
+  if (s == null || !isFinite(s)) return '–';
+  if (s < 60) return Math.round(s) + 's';
+  if (s < 3600) return Math.round(s / 60) + 'm';
+  if (s < 86400) return Math.round(s / 3600) + 'h';
+  return Math.round(s / 86400) + 'd';
 }
 
 // MODEL 卡状态：断连 > running > waiting > idle；key 为 i18n key（渲染层经 T() 翻译）
@@ -1364,6 +1418,18 @@ function renderUp(snap) {
   const g = snap.gauges;
   setModelState(modelState(snap));
   $('model-name').textContent = modelLabel(snap.models);
+  const ni = snap.ninfer;
+  const extra = $('model-extra');
+  if (ni) {
+    extra.hidden = false;
+    extra.textContent = T('nIfInfo', [ni.inFlight ?? '–', ni.batch ?? '–', ni.hostBusyPct ?? '–', fmtAge(ni.lastLogAgeS)]);
+    // 日志超过 30s 没更新 ⇒ 桥多半读到了停更的旧日志源（journal tag / 旧 serve.log），数值不可信
+    extra.classList.toggle('stale', ni.lastLogAgeS != null && ni.lastLogAgeS > 30);
+  } else {
+    extra.hidden = true;
+    extra.textContent = '';
+    extra.classList.remove('stale');
+  }
   animTo('v-succ', snap.successTotal);
   $('s-succ').textContent = T('sSucc', [g.running ?? 0, g.waiting ?? 0]);
   const e2e = snap.hist['e2e_request_latency_seconds'];
@@ -1398,6 +1464,7 @@ function renderUp(snap) {
 function renderDown() {
   document.body.classList.add('stale');
   setModelState({ cls: 'down', key: 'stDisconnected' });
+  $('model-extra').hidden = true;
   $('s-succ').textContent = '—';
   $('s-e2e').textContent = '—';
   $('s-gen').textContent = '—';
@@ -1447,11 +1514,12 @@ function testConnection(t) {
     })
     .catch((err) => {
       const f = classifyFailure(err && err.status != null ? { status: err.status } : { error: err });
-      return { ok: false, msg: f.msg, level: err && err.status === 404 ? 'warn' : 'err' };
+      return { ok: false, code: f.code, msg: f.msg, level: err && err.status === 404 ? 'warn' : 'err' };
     });
 }
 
 function fetchMetrics(url, target) {
+  if (mixedContentBlocked(url)) return Promise.reject({ mixed: true });
   const headers = { 'User-Agent': FIXED_UA };
   if (target.apiKey) headers['Authorization'] = 'Bearer ' + target.apiKey;
   return fetch(url, {
@@ -1488,6 +1556,7 @@ function makeUISnap(t, text) {
     model: snap.model,
     models: snap.models,
     engines: snap.engines,
+    ninfer: snap.ninfer,
     specDecode: snap.specDecode,
     hist: snap.hist,
     cacheHit: snap.cacheHit,
@@ -1508,7 +1577,7 @@ function onSample(id, text) {
 
 function onFail(id, err) {
   failedSet.add(id);
-  const f = classifyFailure(err && err.status != null ? { status: err.status } : { error: err });
+  const f = classifyFailure(err && err.status != null ? { status: err.status } : { mixed: !!(err && err.mixed), error: err });
   failInfo.set(id, f);
   renderSnapshot(id, { up: false, error: f.msg });
   refreshBanner();
@@ -1521,6 +1590,7 @@ function refreshBanner() {
   const hint = (id) => {
     const f = failInfo.get(id);
     if (!f) return T('bannerRetry');
+    if (f.code === 'mixed') return T('bannerMixed');
     if (f.code === 'blocked') return T('bannerCors');
     if (f.code === 'auth') return T('bannerAuth');
     return f.msg + ' · ' + T('bannerRetry');
@@ -1615,24 +1685,30 @@ function toggleTarget(t) {
 // 添加/编辑实例弹窗（挂载到 #modal-root；传入 editT → 编辑模式：预填字段 + 保留 id）
 let editingTarget = null;
 function openAddModal(editT = null) {
+  // 防御：click 事件直接当参数传入时（addEventListener('click', openAddModal)）会被误判成编辑态
+  if (editT && (typeof editT !== 'object' || typeof editT.baseURL !== 'string')) editT = null;
   const root = $('modal-root');
   if (root.querySelector('#modal')) return;
   editingTarget = editT;
   const isEdit = !!editT;
+  // 添加模式 editT 为 null：模板取值必须用空对象兜底，否则 editT.name 直接抛错、弹窗打不开
+  const ev = editT || { name: '', baseURL: '', metricsPath: '', apiKey: '', enabled: true };
   const v = (s) => (isEdit ? ` value="${esc(s)}"` : '');
   root.innerHTML = `
   <div class="mask" id="modal">
     <div class="modal">
       <h3 data-i18n="${isEdit ? 'modalEditTitle' : 'modalTitle'}">${isEdit ? '编辑监控实例' : '添加监控实例'}</h3>
-      <label data-i18n="fName">名称<input id="f-name" data-i18n-ph="fNamePh" placeholder="实例名称" autocomplete="off"${v(editT.name)}></label>
-      <label>Base URL<input id="f-base" placeholder="https://your-vllm.example.com/v1" autocomplete="off" spellcheck="false"${v(editT.baseURL)}></label>
-      <label data-i18n="fPath">metrics 路径（可选）<input id="f-path" data-i18n-ph="fPathPh" placeholder="/vllm/metrics" autocomplete="off" spellcheck="false"${v(editT.metricsPath)}></label>
+      <label data-i18n="fName">名称<input id="f-name" data-i18n-ph="fNamePh" placeholder="实例名称" autocomplete="off"${v(ev.name)}></label>
+      <label>Base URL<input id="f-base" placeholder="https://your-vllm.example.com/v1" autocomplete="off" spellcheck="false"${v(ev.baseURL)}></label>
+      <label data-i18n="fPath">metrics 路径（可选）<input id="f-path" data-i18n-ph="fPathPh" placeholder="/vllm/metrics" autocomplete="off" spellcheck="false"${v(ev.metricsPath)}></label>
       <p class="hint" data-i18n="hintAuto">留空 = 自动 origin+/metrics</p>
-      <label data-i18n="fKey">API Key（可选）<input id="f-key" type="password" data-i18n-ph="fKeyPh" placeholder="sk-…（以 Bearer 头随请求发送）" autocomplete="off"${v(editT.apiKey)}></label>
+      <label data-i18n="fKey">API Key（可选）<input id="f-key" type="password" data-i18n-ph="fKeyPh" placeholder="sk-…（以 Bearer 头随请求发送）" autocomplete="off"${v(ev.apiKey)}></label>
       <p class="hint" data-i18n="hintLocal">仅存本机</p>
-      <label class="chk"><input type="checkbox" id="f-enabled"${isEdit && !editT.enabled ? '' : ' checked'}><span data-i18n="${isEdit ? 'chkEnableEdit' : 'chkEnable'}">${isEdit ? '编辑后启用监控' : '添加后启用监控'}</span></label>
+      <p class="hint" data-i18n="hintNinfer">nInfer 用户：填桥地址 http://主机:50218/v1 与 API Key</p>
+      <label class="chk"><input type="checkbox" id="f-enabled"${isEdit && !ev.enabled ? '' : ' checked'}><span data-i18n="${isEdit ? 'chkEnableEdit' : 'chkEnable'}">${isEdit ? '编辑后启用监控' : '添加后启用监控'}</span></label>
       <div class="mrow">
         <button class="btn ghost" id="f-cancel" type="button" data-i18n="cancel">取消</button>
+        <button class="btn ghost" id="f-force" type="button" data-i18n="addAnyway" hidden>仍然添加</button>
         <button class="btn primary" id="f-add" type="button" data-i18n="${isEdit ? 'save' : 'add'}">${isEdit ? '保存' : '添加'}</button>
       </div>
       <p class="merr" id="f-msg" hidden></p>
@@ -1643,12 +1719,62 @@ function openAddModal(editT = null) {
   q('#f-cancel').addEventListener('click', closeModal);
   q('#modal').addEventListener('click', (e) => { if (e.target.id === 'modal') closeModal(); });
   q('#f-add').addEventListener('click', isEdit ? editInstance : addInstance);
+  q('#f-force').textContent = T(isEdit ? 'saveAnyway' : 'addAnyway');
+  q('#f-force').addEventListener('click', () => {
+    if (!pendingTarget) return;
+    if (editingTarget) commitEdit(pendingTarget, null);
+    else commitTarget(pendingTarget, null);
+  });
   q('#f-name').focus();
 }
 
 function closeModal() {
   const root = $('modal-root');
   if (root) root.innerHTML = '';
+  pendingTarget = null;
+}
+
+let pendingTarget = null; // 测试连接期间构造的实例；测试失败时供「仍然添加」使用
+
+// 真正落库 + 建 UI：无论连接测试结果如何都走这里，失败（离线/混合内容/CORS）不再让实例凭空消失
+function commitTarget(t, result) {
+  const list = targets.concat([t]);
+  saveTargets(storageRef, list);
+  activeId = t.id;
+  applyTargets(list);
+  pendingTarget = null;
+  const root = $('modal-root');
+  const btn = root.querySelector('#f-add');
+  if (btn) btn.disabled = false;
+  const msg = root.querySelector('#f-msg');
+  if (msg) {
+    msg.textContent = result && result.ok
+      ? T('connected', [modelLabel(result.models), result.vllmCount])
+      : T('addedOffline');
+    msg.className = 'merr ok';
+    msg.hidden = false;
+  }
+  setTimeout(closeModal, result && result.ok ? 700 : 1500);
+}
+
+// 编辑保存：与 commitTarget 同口径——测试连不上也允许落库，实例/改动不会凭空消失
+function commitEdit(t, result) {
+  const list = targets.map((x) => (x.id === t.id ? t : x));
+  saveTargets(storageRef, list);
+  applyTargets(list);
+  pendingTarget = null;
+  const root = $('modal-root');
+  const btn = root.querySelector('#f-add');
+  if (btn) btn.disabled = false;
+  const msg = root.querySelector('#f-msg');
+  if (msg) {
+    msg.textContent = result && result.ok
+      ? T('connected', [modelLabel(result.models), result.vllmCount])
+      : T('savedOffline');
+    msg.className = 'merr ok';
+    msg.hidden = false;
+  }
+  setTimeout(closeModal, result && result.ok ? 700 : 1500);
 }
 
 async function addInstance() {
@@ -1665,28 +1791,24 @@ async function addInstance() {
   let t;
   try { t = makeTarget({ name, baseURL, metricsPath, apiKey, enabled }); }
   catch (e) { msg.textContent = e.message || T('invalid'); msg.className = 'merr'; msg.hidden = false; return; }
+  pendingTarget = t;
 
-  // 保存前自动跑一次测试连接
+  // 保存前跑一次测试连接：只作提示，不再作为「能否添加」的硬门槛
   btn.disabled = true;
+  q('#f-force').hidden = true;
   msg.className = 'merr dim';
   msg.textContent = T('testing');
   msg.hidden = false;
   const r = await testConnection(t);
   if (root.querySelector('#modal') == null) return; // 测试期间弹窗已被关闭
   if (!r.ok) {
-    msg.textContent = r.msg;
+    msg.textContent = r.msg + ' — ' + T('addAnyway') + '?';
     msg.className = 'merr' + (r.level === 'warn' ? ' warn' : '');
     btn.disabled = false;
+    q('#f-force').hidden = false; // 关键修复：连不上也能把实例加到页面上，之后由轮询自动重试
     return;
   }
-  const list = targets.concat([t]);
-  saveTargets(storageRef, list);
-  activeId = t.id;
-  applyTargets(list);
-  btn.disabled = false;
-  msg.textContent = T('connected', [modelLabel(r.models), r.vllmCount]);
-  msg.className = 'merr ok';
-  setTimeout(closeModal, 700); // 成功提示短暂可见后自动关闭
+  commitTarget(t, r);
 }
 
 // 保存编辑：makeTarget 保留 input.id → 历史曲线/activeId 连续，仅字段更新
@@ -1705,26 +1827,23 @@ async function editInstance() {
   try { t = makeTarget({ ...editingTarget, name, baseURL, metricsPath, apiKey, enabled }); }
   catch (e) { msg.textContent = e.message || T('invalid'); msg.className = 'merr'; msg.hidden = false; return; }
 
-  // 保存前自动跑一次测试连接（与添加同口径）
+  // 保存前跑一次测试连接（与添加同口径）：只作提示，不再作为能否保存的硬门槛
+  pendingTarget = t;
   btn.disabled = true;
+  q('#f-force').hidden = true;
   msg.className = 'merr dim';
   msg.textContent = T('testing');
   msg.hidden = false;
   const r = await testConnection(t);
   if (root.querySelector('#modal') == null) return; // 测试期间弹窗已被关闭
   if (!r.ok) {
-    msg.textContent = r.msg;
+    msg.textContent = r.msg + ' — ' + T('saveAnyway') + '?';
     msg.className = 'merr' + (r.level === 'warn' ? ' warn' : '');
     btn.disabled = false;
+    q('#f-force').hidden = false;
     return;
   }
-  const list = targets.map((x) => (x.id === t.id ? t : x));
-  saveTargets(storageRef, list);
-  applyTargets(list);
-  btn.disabled = false;
-  msg.textContent = T('connected', [modelLabel(r.models), r.vllmCount]);
-  msg.className = 'merr ok';
-  setTimeout(closeModal, 700);
+  commitEdit(t, r);
 }
 
 // 实例列表整体重建：重建实例切换 UI + 重启 poller
@@ -1835,7 +1954,7 @@ function boot() {
   $('theme').addEventListener('click', () => setTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'));
   $('lang').value = lang;
   $('lang').addEventListener('change', () => setLang($('lang').value));
-  $('add').addEventListener('click', openAddModal);
+  $('add').addEventListener('click', () => openAddModal());
   $('manage').addEventListener('click', openDrawer);
   $('drawer-close').addEventListener('click', closeDrawer);
   $('drawer-mask').addEventListener('click', closeDrawer);
@@ -1866,7 +1985,7 @@ function boot() {
 
   // 空列表 → 欢迎态
   applyTargets(loaded);
-  $('welcome-add').addEventListener('click', openAddModal);
+  $('welcome-add').addEventListener('click', () => openAddModal());
 
   // 隐藏标签页暂停抓取，可见时恢复（poller 链式 1:1，恢复只补一拍，无爆发）
   document.addEventListener('visibilitychange', () => {

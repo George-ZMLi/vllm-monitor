@@ -35,6 +35,16 @@
 
 桌面双击 `index.html`（`file://` 路径）继续可用，与托管链接互不影响。
 
+## nInfer（capy-flash）接入
+
+nInfer 的 `ninfer-serve` 本身没有 `/metrics`，需先在推理机跑 `ninfer-bridge`（`main` 分支提供桥与代理脚本），
+它会把 nInfer 日志解析成 vLLM 兼容指标，默认监听 `50218`：
+
+1. 面板里新增实例：Base URL 填 `http://<推理机IP>:50218/v1`，API Key 与 nInfer 相同，metrics 路径留空（即 `/metrics`）。名称可留空，自动取域名。
+2. **HTTPS 页面（GitHub Pages 链接）无法直连 `http://` 端点**：浏览器会按「混合内容」拦截。把桥放到 HTTPS 反向代理 / Cloudflare 隧道后面，用 `https://...` 地址填 Base URL；或直接在本地双击 `index.html` 用 `file://` 打开（此时桥需放行 `null` origin 的 CORS）。
+3. 连不上时弹窗会给出原因，并提供 **「仍然添加」** 按钮：实例一定会显示出来，页面随后按退避策略自动重试，不必等测试通过才能添加。
+4. 识别到桥的 `ninfer_*` 指标后，MODEL 卡下方会显示 nInfer 专属信息（在途 / batch / 主机占用 / 日志年龄）；日志超过 30 秒没更新会高亮，提示桥可能读到了停更的旧日志源（此时数字不可信）。
+
 ## server 版（旧）
 
 如果你更希望通过 Node 服务托管抓取（服务端轮询 + 浏览器看面板）：

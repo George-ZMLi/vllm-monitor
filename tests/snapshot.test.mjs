@@ -72,6 +72,19 @@ test('buildSnapshot: 双模型样本 → models [m1, m2]（label 出现序），
   assert.ok(deepEqual(s.models, ['m1', 'm2']));
   assert.equal(s.model, 'm1');
 });
+test('buildSnapshot: 识别 ninfer-bridge 的 ninfer_* 诊断指标', () => {
+  const plain = buildSnapshot(parseProm(FIX));
+  assert.equal(plain.ninfer, null); // 普通 vLLM 端点不带 nInfer 信息
+  const s = buildSnapshot(parseProm(FIX + `
+ninfer_up 1
+ninfer_requests_in_flight 3
+ninfer_batch_size 2.77
+ninfer_host_busy_percent 42.6
+ninfer_last_log_age_seconds 11058.45`));
+  assert.ok(deepEqual(s.ninfer, {
+    up: 1, inFlight: 3, batch: 2.77, hostBusyPct: 42.6, lastLogAgeS: 11058.45,
+  }));
+});
 test('computeRates: 正常差值 / 计数器回退 null / 单条 null / 同 ts null', () => {
   const r = computeRates([
     { ts: 0, c: { prompt: 100, generation: 1000, success: 10, preemptions: 1 } },
