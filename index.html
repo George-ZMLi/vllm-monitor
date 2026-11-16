@@ -793,7 +793,7 @@ const THEME_KEY = 'vllmmon.theme';
 const LANG_KEY = 'vllmmon.lang';
 const WINDOWS = [600000, 1800000, 3600000];   // 数据窗口：10 / 30 / 60 分钟
 const WINDOW_KEY = 'vllmmon.window';
-const FIXED_UA = 'vllm-monitor';              // 固定非空 UA
+// 浏览器会自动发送 User-Agent；fetch 里手动设置会被 Firefox 带进 CORS 预检，勿加。
 
 const targets = [];                          // 实例列表；poller 共享此引用，applyTargets 原地增删
 const store = new Map();                       // target.id -> 环形缓冲 { ts, ...VALUE_KEYS }
@@ -1520,7 +1520,9 @@ function testConnection(t) {
 
 function fetchMetrics(url, target) {
   if (mixedContentBlocked(url)) return Promise.reject({ mixed: true });
-  const headers = { 'User-Agent': FIXED_UA };
+  // 不要设置 User-Agent：浏览器禁止脚本覆盖它；Firefox 会把它带进 CORS 预检，
+  // 而服务端只允许 authorization/content-type，预检失败会被误报成“网络不可达或 CORS 拦截”。
+  const headers = {};
   if (target.apiKey) headers['Authorization'] = 'Bearer ' + target.apiKey;
   return fetch(url, {
     method: 'GET',
@@ -1997,7 +1999,7 @@ function boot() {
 }
 
 // ---------- Node 测试钩子（固定尾部，勿动）----------
-if (typeof module !== 'undefined' && module.exports) module.exports = { parseLabels, parseProm, sumSeries, histogram, percentile, HISTS, buildSnapshot, computeRates, httpStats, vllmCountOf, metricsUrlOf, makeTarget, loadTargets, saveTargets, classifyFailure, nextDelayMs, intervalFor, createPoller, VALUE_KEYS, evict, xFrac, pickTickStep, decimIdx, modelState, factsFromSnap, T };
+if (typeof module !== 'undefined' && module.exports) module.exports = { parseLabels, parseProm, sumSeries, histogram, percentile, HISTS, buildSnapshot, computeRates, httpStats, vllmCountOf, metricsUrlOf, makeTarget, loadTargets, saveTargets, classifyFailure, nextDelayMs, intervalFor, createPoller, fetchMetrics, VALUE_KEYS, evict, xFrac, pickTickStep, decimIdx, modelState, factsFromSnap, T };
 if (typeof document !== 'undefined' && typeof boot === 'function' && document.getElementById) boot();
 </script>
 </body>

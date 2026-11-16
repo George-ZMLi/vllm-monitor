@@ -3,12 +3,12 @@ import vm from 'node:vm';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export function loadCore() {
+export function loadCore(extra = {}) {
   const html = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'index.html'), 'utf8');
   const m = html.match(/<script>([\s\S]*)<\/script>/);
   if (!m) throw new Error('index.html 缺少内联 <script>');
   const module = { exports: {} };
-  const ctx = vm.createContext({ module, console, setTimeout, clearTimeout, URL, AbortController });
+  const ctx = vm.createContext({ module, console, setTimeout, clearTimeout, URL, AbortController, AbortSignal, ...extra });
   vm.runInContext(m[1], ctx, { filename: 'index.html#inline' });
   return module.exports;
 }

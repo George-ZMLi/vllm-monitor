@@ -87,3 +87,27 @@ test('classifyFailure: HTTPS 页面抓 HTTP 端点 → mixed（与 CORS 区分�
   assert.equal(classifyFailure({ error: { mixed: true } }).code, 'mixed');
   assert.equal(classifyFailure({ status: 200 }).code, 'ok');
 });
+
+test('fetchMetrics: 不手动设置 User-Agent（Firefox 会因此让 CORS 预检失败）', async () => {
+  const calls = [];
+  const core = loadCore({
+    fetch: (url, init) => {
+      calls.push({ url, init });
+      return Promise.resolve({ ok: true, text: async () => 'vllm:num_requests_running 1\n' });
+    },
+  });
+  const text = await core.fetchMetrics('https://h.example.com/metrics', { apiKey: 'secret' });
+  assert.match(text, /num_requests_running/);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].init.method, 'GET');
+  assert.equal(calls[0].init.cache, 'no-store');
+  assert.ok(calls[0].init.signal);
+  assert.equal(calls[0].init.headers.Authorization, 'Bearer secret');
+  assert.equal(calls[0].init.headers['User-Agent'], undefined);
+  assert.equal(calls[0].init.headers['user-agent'], undefined);
+
+  // 没配 Key 时不应带 Authorization
+  calls.length = 0;
+  await core.fetchMetrics('https://h.example.com/metrics', { apiKey: '' });
+  assert.deepEqual(Object.keys(calls[0].init.headers), []);
+});
