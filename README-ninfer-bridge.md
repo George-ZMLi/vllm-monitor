@@ -40,19 +40,29 @@ nInfer（capy-flash，`ninfer-serve`）只暴露 OpenAI 兼容 API 和 `/health`
 | systemd journal（默认） | `JOURNAL_TAG=runvllm.sh.desktop` | GNOME 自启动 `runvllm.sh.desktop` 拉起的 `ninfer-serve` 日志进 journal，identifier 就是 .desktop 文件名。启动时回填最近 2000 行，随后实时跟随 |
 | 文件 tail | `LOG_FILE=/path/to/serve.log` | 500ms 轮询，支持日志截断/轮转；设置了 LOG_FILE 时优先于 journal |
 
-换启动器导致 journal tag 变化时，设 `JOURNAL_TAG` 即可。
+`run-bridge.sh` 会自动选择：若 `/home/george/capy-flash/serve.log` 存在且 5 分钟内更新过，
+就 tail 这个文件，否则回退 journal（可用 `NINFER_LOG_FILE` 覆盖候选路径）。
+**注意**：nInfer 手动启动并把 stdout 重定向到 `serve.log` 时，journal 里可能只有旧进程；
+桥必须跟 serve.log，否则指标会停在过去。
+
+窗口时长从日志行的 `throughput | 5.0s |` 读取，因此把 nInfer 的统计间隔改成 1s
+不需要改桥：
+
+    ./serve-27b.sh ... --log-stats-interval-ms 1000   # 默认 5000；0 关闭
+
+`serve-27b.sh` 已默认带上 `--log-stats-interval-ms 1000`，需重启 nInfer 生效。
 
 ## 指标与 vLLM 语义对照
 
 | 指标 | 来源 | 说明 |
 | --- | --- | --- |
-| `vllm:num_requests_running` | 窗口行 `running N` + 在途请求数 | 服务器探明离线或无在途请求时为 0 |
-| `vllm:num_requests_waiting` | 在途 − running | 近似值（nInfer 不单独打印队列长度） |
+| `vllm:num_requests_running` | 窗口行 `running N` | 窗口行新鲜时以日志为准；日志停了才退回在途请求数 |
+| `vllm:num_requests_waiting` | 窗口行 `waiting N`，缺失时用 在途 − running | 窗口行过期时退回估算 |
 | `vllm:prompt_tokens_total` | 窗口行 prefill token 数 + 每请求 cache 部分 | vLLM 语义（含缓存），用于面板缓存命中率 |
-| `vllm:generation_tokens_total` | 窗口行 decode token 数 | 按窗口速率匀速放行，任意轮询频率下 delta/dt 平滑 |
+| `vllm:generation_tokens_total` | 窗口行 decode token 数 | 按该行实际窗口时长匀速放行（5s 或 1s），任意轮询频率下 delta/dt 平滑 |
 | `vllm:prompt_tokens_cached_total` | 每请求 `cache N` | |
 | `vllm:time_to_first_token_seconds` 等 6 个直方图 | 每请求 done 行 | 分桶边界与 vLLM 0.32 完全一致（`vllm/v1/metrics/buckets.py`） |
-| `vllm:request_success_total{finished_reason=...}` | done 行 | `stop token→stop`、`tool calls→tool_calls`、`output limit→length`、`cancelled→abort` |
+| `vllm:request_success_total{finished_reason=...}` | done / failed / cancelled 行 | `stop token→stop`、`tool calls→tool_calls`、`output limit→length`、`cancelled→abort`、生成失败→error |
 | `vllm:spec_decode_num_*_tokens_total` | `mtp accepted A/D` | A=接受，D=提出 |
 | `process_resident_memory_bytes` | `/proc/<pid>/status` | 扫描 `ninfer-serve` 进程 |
 | `vllm:kv_cache_usage_perc` | — | **nInfer 日志不输出 KV 占用，面板该面板显示 0**（已知限制） |

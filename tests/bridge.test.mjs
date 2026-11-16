@@ -37,6 +37,9 @@ const L_DONE_MS = '2026-11-14 14:13:27.084  INFO  req#550 done | openai-chat | t
 const L_DONE_SEC = '2026-11-12 22:40:19.926  INFO  req#1 done | openai-chat | stop token | prompt 97,548 | output 160 | cache 0 (0.0%) | TTFT 23.3s | total 24.7s | queue 35.3 ms | prefill 4.20k tok/s | decode 116.9 tok/s | mtp accepted 99/240 (41.2%)';
 const L_DONE_MIN = '2026-11-12 22:33:11.357  INFO  req#10 done | openai-chat | stop token | prompt 19,997 | output 1,110 | cache 19,466 (97.3%, long anchor) | TTFT 57.3s | total 1m 15.6s | queue 42.9 ms | prefill 10.9k tok/s | decode 163.4 tok/s | mtp accepted 68/112 (60.7%)';
 const L_DONE_NOQUEUE = '2026-11-13 07:36:58.050  INFO  req#12 done | openai-chat | stop token | prompt 20,012 | output 201 | cache 0 (0.0%) | TTFT 1.9s | total 3.4s | prefill 10.4k tok/s | decode 137.1 tok/s | mtp accepted 132/280 (47.1%)';
+const L_WINDOW_1S = '2026-11-16 18:25:11.931  INFO  throughput | 1.0s | decode 200.0 tok/s (200 tok) | running 2 (decode-ready 2) | waiting 1 | batch 2.00 | host 8.0% (80 ms)';
+const L_FAILED = '2026-11-16 14:54:16.075  ERROR req#263 failed during generation | openai-chat | HTTP 500 | internal error';
+const L_CANCELLED = '2026-11-14 14:48:31.467  INFO  req#635 cancelled during transport | openai-chat | HTTP 499 | client disconnected';
 const L_STARTED = '2026-11-14 14:10:59.044  INFO  req#538 started | openai-chat stream | 43 messages | max output 32,768 | thinking xhigh | tools 1 | preserve thinking';
 
 test('parseRateTok / parseIntNum / parseDurS / mapReason', async () => {
@@ -121,6 +124,38 @@ test('解析窗口行与 done 行：计数、直方图、inFlight', async () => 
   // queue 缺失不影响
   assert.equal(st.hists.queue.count, 3); // 三条带 queue 的行（MS/SEC/MIN），NOQUEUE 无
   assert.equal(waitingNow(st, tsOf(L_DONE_NOQUEUE) + 100000), 0);
+});
+
+test('1s 窗口按行内时长折算；waiting 取日志字段；失败/取消行扣 inFlight', async () => {
+  const { createBridgeState, resetHistState, handleLine, counterValue, runningNow, waitingNow } = await requireBridge();
+  const st = createBridgeState();
+  resetHistState(st);
+  st.ninferUp = true;
+  const t = tsOf(L_WINDOW_1S); // 窗口 [t-1000, t]
+  handleLine(st, L_STARTED, t - 1000);
+  handleLine(st, L_WINDOW_1S, t);
+  assert.equal(st.lastWindow.windowMs, 1000);
+  assert.equal(st.lastWindow.waiting, 1);
+  assert.equal(st.lastWindow.running, 2);
+  assert.equal(st.lastWindow.decodeReady, 2);
+  assert.equal(waitingNow(st, t + 100), 1); // 日志里的 waiting 优先于 inFlight-running
+  assert.equal(runningNow(st, t + 100), 2);
+  // 1s 窗口：到达后 0.5s 只放行一半，1s 后全部放行（不能按 5s 折算）
+  const half = counterValue(st, 'generation', t + 500);
+  assert.ok(Math.abs(half - 100) < 0.01, '1s mid-window: ' + half);
+  const full = counterValue(st, 'generation', t + 1000);
+  assert.ok(Math.abs(full - 200) < 0.001, '1s full window: ' + full);
+
+  // 失败行：HTTP 500 → error；取消行：HTTP 499 → abort；两者都要扣 inFlight
+  handleLine(st, L_STARTED, t + 2000);
+  handleLine(st, L_FAILED, t + 3000);
+  assert.equal(st.inFlight, 1); // 第一条 started 仍未结束
+  assert.equal(st.successByReason.error, 1);
+  handleLine(st, L_STARTED, t + 4000);
+  handleLine(st, L_CANCELLED, t + 5000);
+  assert.equal(st.inFlight, 1);
+  assert.equal(st.successByReason.abort, 1);
+  assert.equal(st.successTotal, 2);
 });
 
 test('promText：vLLM 命名、标签、分桶、页面解析器可还原', async () => {

@@ -18,6 +18,11 @@
  *                                    ninfer-serve 默认把日志写进 systemd journal，
  *                                    identifier 就是 .desktop 文件名）
  * 默认：LOG_FILE 未设时走 journal，tag 默认 runvllm.sh.desktop。
+ * 注意：如果 nInfer 实际把日志重定向到了 serve.log（例如手动启动），必须设
+ * LOG_FILE 指向它；否则 journal 里可能只有旧进程，指标会停在过去。
+ *
+ * throughput 窗口时长从日志行的 `throughput | 5.0s |` 读取，因此
+ * `--log-stats-interval-ms 1000`（1s 窗口）无需改桥。
  *
  * 其它环境变量：
  *   PORT=50218            桥端口
@@ -55,8 +60,8 @@ if (!API_KEY && process.env.API_KEY_FILE) {
   catch { /* 忽略 */ }
 }
 
-const WINDOW_MS = 5000;      // nInfer throughput 行固定 5.0s 窗口
-const ITL_CAP = 8192;        // 每请求最多计入的 ITL 样本数（大输出时近似）
+const DEFAULT_WINDOW_MS = 5000; // throughput 行未写窗口时按 5s 处理
+const ITL_CAP = 8192;           // 每请求最多计入的 ITL 样本数（大输出时近似）
 const HEALTH_POLL_MS = 5000;
 
 // ---------- vLLM 0.32 的直方图分桶（vllm/v1/metrics/buckets.py） ----------
@@ -132,7 +137,7 @@ export function createBridgeState() {
     startedAt: Date.now(),
     // 累计计数（自桥启动/回填起）
     base: { prompt: 0, generation: 0, cached: 0 },
-    pending: { prompt: [], generation: [] },   // 未走完的 5s 窗口 {n, start, end}
+    pending: { prompt: [], generation: [] },   // 未走完的 throughput 窗口 {n, start, end}
     successByReason: {},
     successTotal: 0,
     mtp: { drafts: 0, accepted: 0 },
@@ -171,12 +176,15 @@ export function addSample(state, key, value, n = 1) {
 /**
  * 窗口行在窗口**结束**时才打印（ts = 窗口末），此刻 token 数已完整。
  * 若在到达瞬间全额计入，计数器是阶跃的（面板速率忽高忽低）。
- * 因此把这笔 token 额在**到达后的 5s** 内线性放行：
+ * 因此把这笔 token 额在**该窗口的实际时长**内线性放行：
  * 计数器以窗口速率匀速上涨，页面 delta/dt 在任意轮询频率下都平滑且精确。
+ * nInfer 默认 5s 窗口，也可用 --log-stats-interval-ms 1000 改成 1s；
+ * 窗口时长从日志行的 `throughput | 5.0s |` 里读，不能再写死。
  */
-function pushWindow(state, kind, n, endTs) {
+function pushWindow(state, kind, n, endTs, windowMs = DEFAULT_WINDOW_MS) {
   if (n == null || n <= 0) return;
-  state.pending[kind].push({ n, start: endTs, end: endTs + WINDOW_MS });
+  if (!isFinite(windowMs) || windowMs <= 0) windowMs = DEFAULT_WINDOW_MS;
+  state.pending[kind].push({ n, start: endTs, end: endTs + windowMs });
 }
 
 /** 当前累计值：base + 未走完窗口按时间线性折算（严格单调，面板速率平滑） */
@@ -204,20 +212,27 @@ export function handleLine(state, line, now = Date.now()) {
   if (typeof line !== 'string' || !line.length) return;
   const ts = lineTs(line) ?? now;
   if (line.includes('throughput |')) {
+    const mw = line.match(/throughput \| ([\d.]+)\s*(ms|s) \|/);
+    const windowMs = mw ? Number(mw[1]) * (mw[2] === 'ms' ? 1 : 1000) : DEFAULT_WINDOW_MS;
     const mp = line.match(/prefill ([\d.]+)k? tok\/s \(([\d,]+) tok\)/);
     const md = line.match(/decode ([\d.]+)k? tok\/s \(([\d,]+) tok\)/);
     const mr = line.match(/running (\d+)/);
+    const mrd = line.match(/decode-ready (\d+)/);
+    const mwat = line.match(/\bwaiting (\d+)/);
     const mb = line.match(/batch ([\d.]+)/);
     const mh = line.match(/host ([\d.]+)%/);
     const prev = state.lastWindow || {};
     state.lastWindow = {
       ts,
+      windowMs: isFinite(windowMs) && windowMs > 0 ? windowMs : DEFAULT_WINDOW_MS,
       running: mr ? Number(mr[1]) : (prev.running ?? 0),
+      decodeReady: mrd ? Number(mrd[1]) : (prev.decodeReady ?? 0),
+      waiting: mwat ? Number(mwat[1]) : null,
       batch: mb ? Number(mb[1]) : prev.batch,
       host: mh ? Number(mh[1]) : prev.host,
     };
-    if (mp) pushWindow(state, 'prompt', parseIntNum(mp[2]), ts);
-    if (md) pushWindow(state, 'generation', parseIntNum(md[2]), ts);
+    if (mp) pushWindow(state, 'prompt', parseIntNum(mp[2]), ts, state.lastWindow.windowMs);
+    if (md) pushWindow(state, 'generation', parseIntNum(md[2]), ts, state.lastWindow.windowMs);
     state.lastLineAt = ts;
     state.lastLineKind = 'window';
     state.linesSeen++;
@@ -229,6 +244,18 @@ export function handleLine(state, line, now = Date.now()) {
     state.lastLineAt = ts;
     state.lastLineKind = 'started';
     state.linesSeen++;
+    return;
+  }
+
+  if (/req#\d+ (?:failed|cancelled|canceled|aborted)\b/.test(line)) {
+    // 失败/取消的请求不会打印 done 行；不扣 inFlight 会永久虚高
+    state.inFlight = Math.max(0, state.inFlight - 1);
+    state.lastLineAt = ts;
+    state.lastLineKind = 'error';
+    state.linesSeen++;
+    const reason = /HTTP 499|disconnected/i.test(line) ? 'abort' : 'error';
+    state.successByReason[reason] = (state.successByReason[reason] || 0) + 1;
+    state.successTotal++;
     return;
   }
 
@@ -269,18 +296,32 @@ export function handleLine(state, line, now = Date.now()) {
 
 // ---------- 派生量 ----------
 
+function freshWindow(state, now) {
+  const w = state.lastWindow;
+  if (!w) return null;
+  const maxAge = Math.max(15000, (w.windowMs || DEFAULT_WINDOW_MS) * 3);
+  return now - w.ts <= maxAge && now >= w.ts - maxAge ? w : null;
+}
+
 export function runningNow(state, now) {
   // 服务器已探明离线（10s 内有探测且失败）→ 强制 0
   if (state.ninferCheckAt && !state.ninferUp && now - state.ninferCheckAt < 10000) return 0;
-  // inFlight = started 未 done 的请求数：为 0 表示系统内无请求，running 必为 0
+  // 窗口行是日志里的权威值：即使用户从文件中间回填、started 行缺失，
+  // 也不会把正在跑的请求显示成 0。
+  const w = freshWindow(state, now);
+  if (w) return Math.max(0, w.running ?? 0);
+  // 窗口行过期（日志停了）时退回在途计数
   if (state.inFlight <= 0) return 0;
   const r = state.lastWindow ? state.lastWindow.running : 0;
-  return Math.max(1, r); // 新请求可能还没被最近的 5s 窗口捕获
+  return Math.max(1, r);
 }
 
 export function waitingNow(state, now) {
-  if (state.inFlight <= 0) return 0;
   if (state.ninferCheckAt && !state.ninferUp && now - state.ninferCheckAt < 10000) return 0;
+  const w = freshWindow(state, now);
+  // 日志里直接给了 waiting N 时优先用它（比 inFlight-running 更准）
+  if (w && w.waiting != null) return Math.max(0, w.waiting);
+  if (state.inFlight <= 0) return 0;
   return Math.max(0, state.inFlight - runningNow(state, now));
 }
 
@@ -333,9 +374,9 @@ export function promText(state, now = Date.now()) {
   L.push('vllm:num_requests_waiting' + lab + ' ' + waitingNow(state, now));
   L.push('# HELP vllm:num_preemptions_total Cumulative preemptions (nInfer does not preempt).', '# TYPE vllm:num_preemptions_total counter');
   L.push('vllm:num_preemptions_total' + lab + ' 0');
-  L.push('# HELP vllm:prompt_tokens_total Cumulative prompt tokens (prefill work from 5s windows + cached portion per finished request, vLLM semantics).', '# TYPE vllm:prompt_tokens_total counter');
+  L.push('# HELP vllm:prompt_tokens_total Cumulative prompt tokens (prefill work from throughput windows + cached portion per finished request, vLLM semantics).', '# TYPE vllm:prompt_tokens_total counter');
   L.push('vllm:prompt_tokens_total' + lab + ' ' + fmt(counterValue(state, 'prompt', now)));
-  L.push('# HELP vllm:generation_tokens_total Cumulative generated tokens (integrated from 5s windows).', '# TYPE vllm:generation_tokens_total counter');
+  L.push('# HELP vllm:generation_tokens_total Cumulative generated tokens (integrated from throughput windows).', '# TYPE vllm:generation_tokens_total counter');
   L.push('vllm:generation_tokens_total' + lab + ' ' + fmt(counterValue(state, 'generation', now)));
   L.push('# HELP vllm:prompt_tokens_cached_total Cumulative cached prompt tokens.', '# TYPE vllm:prompt_tokens_cached_total counter');
   L.push('vllm:prompt_tokens_cached_total' + lab + ' ' + Math.round(state.base.cached));
